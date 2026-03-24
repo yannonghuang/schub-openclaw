@@ -1,0 +1,18 @@
+# -----------------------------
+# services/auth/requirements.txt
+# -----------------------------
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+passlib
+python-jose
+pydantic
+alembic
+pydantic[email]
+sqlmodel>=0.0.8
+python-multipart
+python-dotenv
+requests
+httpx
+websockets==15.0.1

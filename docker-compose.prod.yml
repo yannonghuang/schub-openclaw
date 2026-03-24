@@ -1,0 +1,45 @@
+services:
+  auth-service:
+    build:
+      target: prod
+    image: schub-auth:prod
+
+  transcript-service:
+    build:
+      target: prod
+    image: schub-transcript:prod
+
+  streaming-service:
+    build:
+      target: prod
+    image: schub-streaming:prod
+
+  frontend-service:
+    build:
+      target: prod
+    image: schub-frontend:prod
+
+  signaling-service:
+    build:
+      target: prod
+    image: schub-signaling:prod
+
+  openai-service:
+    build:
+      target: prod
+    image: schub-openai:prod
+
+  redis-proxy:
+    build:
+      target: prod
+    image: schub-proxy:prod
+
+  geopol-service:
+    build:
+      target: prod
+    image: schub-geopol:prod
+
+  adaptor-service:
+    build:
+      target: prod
+    image: schub-adaptor:prod

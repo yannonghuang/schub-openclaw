@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+langchain-openai==0.3.30
+langgraph==0.6.5
+langchain-mcp-adapters==0.1.9
+mcp==1.14.1
+fastapi-mcp==0.4.0
+
+# test deps
+pytest
+pytest-asyncio
+httpx

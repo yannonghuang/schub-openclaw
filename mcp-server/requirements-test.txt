@@ -1,0 +1,13 @@
+# Minimal deps for running CI tests (no LangChain stack needed)
+fastapi
+uvicorn[standard]
+python-dotenv
+mcp==1.14.1
+fastapi-mcp==0.4.0
+pydantic
+
+# test deps
+pytest
+pytest-asyncio
+pytest-timeout
+httpx

@@ -1,0 +1,23 @@
+{
+  "agents": {
+    "defaults": { "model": "anthropic/claude-sonnet-4-6" },
+    "list": [
+      { "id": "main",     "workspace": "/root/.openclaw/agents/main" },
+      { "id": "order",    "workspace": "/root/.openclaw/agents/order" },
+      { "id": "material", "workspace": "/root/.openclaw/agents/material" },
+      { "id": "planning", "workspace": "/root/.openclaw/agents/planning" }
+    ]
+  },
+  "mcp": {
+    "servers": {
+      "schub-engines": {
+        "transport": "streamable-http",
+        "url": "http://mcp-server:9500/mcp",
+        "headers": { "X-MCP-API-Key": "${MCP_API_KEY}" }
+      }
+    }
+  },
+  "channels": {
+    "email": { "enabled": true }
+  }
+}

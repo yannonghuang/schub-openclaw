@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "typeRoots": ["./types", "./node_modules/@types"],
+    "target": "ES2017",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noEmit": true,
+    "incremental": true,
+    "module": "esnext",
+    "esModuleInterop": true,
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve"
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/* copy*.tsx",
+    "jest.config.ts",
+    "jest.setup.ts",
+    "jest.polyfills.ts",
+    "**/__tests__/**"
+  ],
+  "paths": {
+      "@/*": ["./*"]
+  },
+}

@@ -1,0 +1,69 @@
+{
+  "structurer": {
+    "traces": [],
+    "train": [],
+    "demos": [
+      {
+        "human_message": "Aluminum supply dropped by 10%, expected delay of 3 days.",
+        "prior_messages": "[]",
+        "business_id": "1",
+        "structured_payload": "{\"business_id\": 1, \"type\": \"Material\", \"materials\": [\"Aluminum Sheet\"], \"quantity_decrease_percentage\": 10, \"delivery_delay_days\": 3}"
+      }
+    ],
+    "signature": {
+      "instructions": "Infer user intent from unstructured text and convert to a structured JSON payload for material_engine. Only include fields that can be confidently inferred. business_id must always be included. Do not invent values. Valid type values: WIP, Order, Planning, Material.",
+      "fields": [
+        {"prefix": "Human Message:", "description": "The most recent human message"},
+        {"prefix": "Prior Messages:", "description": "Relevant prior messages as text"},
+        {"prefix": "Business Id:", "description": "Business ID from system context"},
+        {"prefix": "Structured Payload:", "description": "Single structured JSON object with inferred fields for material_engine. Must include business_id. type must be one of: WIP, Order, Planning, Material. Omit any field that cannot be inferred."}
+      ]
+    },
+    "lm": null
+  },
+  "order_router": {
+    "traces": [],
+    "train": [],
+    "demos": [
+      {
+        "tool_result": "{\"business_id\": 1, \"type\": \"Material\", \"materials\": [\"Aluminum Sheet\"], \"quantity_decrease_percentage\": 10, \"delivery_delay_days\": 3, \"source\": 2, \"recipients\": [101, 103, 1], \"target\": \"supplier\"}",
+        "route_payload": "{\"route\": \"Order Agent\", \"payload\": {\"business_id\": 1, \"type\": \"Order\", \"original_type\": \"Material\", \"materials\": [\"Aluminum Sheet\"], \"quantity_decrease_percentage\": 10, \"delivery_delay_days\": 3, \"source\": 2, \"recipients\": [101, 103, 1], \"target\": \"supplier\"}}"
+      }
+    ],
+    "signature": {
+      "instructions": "Build the route payload for Order Agent from material_engine result. Set route to 'Order Agent'. In payload: change type to 'Order', add original_type='Material'. Output must be a single JSON object with exactly two keys: 'route' and 'payload'.",
+      "fields": [
+        {"prefix": "Tool Result:", "description": "JSON result returned from material_engine"},
+        {"prefix": "Route Payload:", "description": "Single JSON object: {\"route\": \"Order Agent\", \"payload\": {...}} where payload is the tool_result with type changed to 'Order' and original_type set to 'Material'."}
+      ]
+    },
+    "lm": null
+  },
+  "planning_router": {
+    "traces": [],
+    "train": [],
+    "demos": [
+      {
+        "order_decision": "POSITIVE",
+        "tool_result": "{\"business_id\": 1, \"type\": \"Material\", \"materials\": [\"Aluminum Sheet\"], \"quantity_decrease_percentage\": 10, \"delivery_delay_days\": 3, \"source\": 2, \"recipients\": [101, 103, 1], \"target\": \"supplier\"}",
+        "route_payload": "{\"route\": \"Planning Agent\", \"payload\": {\"business_id\": 1, \"type\": \"Planning\", \"original_type\": \"Material\", \"materials\": [\"Aluminum Sheet\"], \"quantity_decrease_percentage\": 10, \"delivery_delay_days\": 3, \"source\": 2, \"recipients\": [101, 103, 1], \"target\": \"supplier\"}}"
+      }
+    ],
+    "signature": {
+      "instructions": "Build the route payload for Planning Agent from material_engine result. Only invoked when the Order Agent decision is POSITIVE. Set route to 'Planning Agent'. In payload: change type to 'Planning', add original_type='Material'. Output must be a single JSON object with exactly two keys: 'route' and 'payload'.",
+      "fields": [
+        {"prefix": "Order Decision:", "description": "Decision from Order Agent — must be POSITIVE to reach this step"},
+        {"prefix": "Tool Result:", "description": "Original JSON result from material_engine"},
+        {"prefix": "Route Payload:", "description": "Single JSON object: {\"route\": \"Planning Agent\", \"payload\": {...}} where payload is the tool_result with type changed to 'Planning' and original_type set to 'Material'."}
+      ]
+    },
+    "lm": null
+  },
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.13",
+      "dspy": "3.1.3",
+      "cloudpickle": "3.1"
+    }
+  }
+}

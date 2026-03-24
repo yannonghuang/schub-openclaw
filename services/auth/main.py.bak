@@ -1,0 +1,300 @@
+# --- auth/main.py (FastAPI) ---
+from fastapi import FastAPI, Depends, HTTPException, status, Response, Request, Cookie
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from shared.db.session import get_session
+from shared.models.user import Account, Partner, User_Session
+from shared.models.transcript import Transcript
+from shared.schemas.user import AccountCreate
+from shared.auth.jwt import create_access_token, decode_access_token, create_reset_token, verify_reset_token
+
+from passlib.context import CryptContext
+from sqlmodel import Session, select
+from pydantic import BaseModel, EmailStr
+from typing import Optional
+import uvicorn
+from sqlalchemy import and_
+
+from uuid import uuid4
+from datetime import datetime
+import os
+import logging
+
+from services.auth.utils.email import send_mail
+
+logger = logging.getLogger("main")
+logging.basicConfig(level=logging.INFO)
+
+app = FastAPI()
+
+# CORS Setup
+app.add_middleware(
+    CORSMiddleware,
+    #allow_origins=[os.getenv("NEXT_PUBLIC_FRONTEND_URL", "http://localhost:3000", "https://192.168.73.141")],
+    allow_origins=[os.getenv("NEXT_PUBLIC_FRONTEND_URL")],    
+    #allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# Schemas
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+    url: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+class SelectRoleRequest(BaseModel):
+    partner_name: str
+
+class UserOut(BaseModel):
+    email: EmailStr
+    partner_names: list[str]
+    partner_name: Optional[str] = None
+
+# Routes
+@app.post("/auth/signup")
+def signup(user: AccountCreate, session: Session = Depends(get_session)):
+    if len(user.partners) != 2:
+        raise HTTPException(status_code=400, detail="Exactly two partners are required")
+
+    existing = session.exec(select(Account).where(Account.email == user.email)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    partner1 = Partner(name=user.partners[0].name)
+    partner2 = Partner(name=user.partners[1].name)
+    new_user = Account(
+        email=user.email,
+        password_hash=pwd_context.hash(user.password),
+        partners=[partner1, partner2]
+    )
+    session.add(new_user)
+    session.commit()
+    session.refresh(new_user)
+
+    return {"message": "Account created", "user": {"email": new_user.email}}
+
+
+def get_open_user_session(account_id: int, session: Session):
+    stmt = (
+        select(User_Session)
+        .where(
+            and_(
+                User_Session.account_id == account_id,
+                User_Session.end_time.is_(None)
+            )            
+        )
+        .order_by(User_Session.start_time.desc())
+        .limit(1)
+    )
+    result = session.exec(stmt).first()
+    return result
+
+@app.post("/auth/signin")
+def signin(
+    response: Response,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    session: Session = Depends(get_session)
+):
+    user = session.exec(select(Account).where(Account.email == form_data.username)).first()
+    if not user or not pwd_context.verify(form_data.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    user_session = get_open_user_session(account_id = user.id, session = session)
+
+    if user_session:
+        logger.info("user session exists for account {user_session.account_id}, start_time {user_session.start_time}, end_time {user_session.end_time}")
+    
+    '''    
+    if user_session and user_session.early_in and user_session.late_in:
+        raise HTTPException(status_code=401, detail="Both partners have been signed in")
+    '''
+
+    #user_session = session.exec(select(User_Session).where(User_Session.account_id == user.id)).first()
+    if not user_session:
+        user_session = User_Session(
+            account=user
+        )
+        session.add(user_session)
+        session.commit()
+        session.refresh(user_session)
+    session_id = str(user_session.id) #str(uuid4())  # New session ID for this login session
+
+    token = create_access_token({"sub": str(user.id), "session_id": session_id})
+    #token = create_access_token({"sub": str(user.id)})
+
+    response.set_cookie(
+        key="token",
+        value=token,
+        httponly=True,
+        samesite="Lax",
+        secure=False
+    )
+
+    return {
+        "message": "Signin successful",
+        "user": {
+            "email": user.email,
+            #"partners": [p.name for p in user.partners if p.name != user_session.early_in],
+            "partners": [p.name for p in user.partners],
+            "session_id": session_id
+        }
+    }
+
+@app.post("/auth/select_role")
+def select_role(
+    data: SelectRoleRequest,
+    token: Optional[str] = Cookie(None),
+    session: Session = Depends(get_session),
+    response: Response = None
+):
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    payload = decode_access_token(token)
+    user_id = payload.get("sub")
+
+    session_id = payload.get("session_id")
+
+    user = session.get(Account, user_id)
+    if not user or data.partner_name not in [p.name for p in user.partners]:
+        raise HTTPException(status_code=400, detail="Invalid partner name")
+
+    user_session = session.get(User_Session, session_id)
+    if not user_session:
+        raise HTTPException(status_code=400, detail="User session does not exist")
+    
+    if user_session.early_in != data.partner_name and user_session.late_in != data.partner_name: 
+        if not user_session.early_in:
+            user_session.early_in = data.partner_name
+        else:
+            user_session.late_in = data.partner_name
+
+    if user_session.early_out == data.partner_name:
+        user_session.early_out = None
+
+    if user_session.late_out == data.partner_name:
+        user_session.late_out = None
+
+    session.add(user_session)
+    session.commit()
+    session.refresh(user_session)
+
+    # Create new token with partner_name
+    new_token = create_access_token({"sub": user_id, "partner_name": data.partner_name, "session_id": session_id})
+
+    response.set_cookie("token", new_token, httponly=True, samesite="Lax", secure=False)
+    return {"message": "Role selected", "user": {
+        "email": user.email,
+        "partner_names": [p.name for p in user.partners],
+        "partner_name": data.partner_name,
+        "session_id": session_id
+    }}
+
+@app.get("/auth/me")
+def get_me(token: Optional[str] = Cookie(None), session: Session = Depends(get_session)):
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    user_id = payload.get("sub")
+    partner_name = payload.get("partner_name")
+    user = session.get(Account, user_id)
+    #user = session.get(Account, int(user_id))
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return {
+        "user": {
+            "email": user.email,
+            "partner_names": [p.name for p in user.partners],
+            "partner_name": partner_name
+        }
+    }
+
+@app.post("/auth/forgot-password")
+def forgot_password(data: ForgotPasswordRequest, session: Session = Depends(get_session)):
+    user = session.exec(select(Account).where(Account.email == data.email)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Email not found")
+    token = create_reset_token(data.email)
+
+    send_mail([data.email], data.url, token)
+
+    return {"reset_token": "Please check your email and following instruction to reset your"}
+
+@app.post("/auth/reset-password")
+def reset_password(data: ResetPasswordRequest, session: Session = Depends(get_session)):
+    email = verify_reset_token(data.token)
+    if not email:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+    user = session.exec(select(Account).where(Account.email == email)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.password_hash = pwd_context.hash(data.new_password)
+    session.commit()
+    return {"message": "Password updated successfully"}
+
+'''
+@app.post("/auth/signout")
+def signout(response: Response):
+    response.delete_cookie("token")
+    return {"message": "Signed out"}
+'''
+
+@app.post("/auth/signout")
+def signout(
+    response: Response,
+    token: Optional[str] = Cookie(None),
+    session: Session = Depends(get_session)
+):
+    if token:
+        try:
+            payload = decode_access_token(token)
+            session_id = payload.get("session_id")
+            if session_id:
+                user_session = session.get(User_Session, session_id)
+                if user_session and not user_session.end_time:
+                    if payload.get("partner_name"):
+                        if not user_session.early_out:
+                            user_session.early_out = payload.get("partner_name")
+                        else:
+                            user_session.late_out = payload.get("partner_name")
+
+                    if (
+                        (not user_session.early_in and not user_session.late_in) and (not user_session.early_out and not user_session.late_out) or
+                        ((user_session.early_in and not user_session.late_in) and (user_session.early_out and not user_session.late_out)) or
+                        ((user_session.early_in and user_session.late_in) and (user_session.early_out and user_session.late_out))
+                        ):
+                        user_session.end_time = datetime.utcnow()
+
+                    session.add(user_session)
+                    session.commit()
+        except Exception as e:
+            logger.error(e)
+            # Optionally log the error
+    else:
+        logger.info("token cookie does not exist when signout")
+
+    response.delete_cookie("token")
+    return {"message": "Signed out"}
+
+@app.on_event("startup")
+def on_startup():
+    from shared.db.session import engine
+    from shared.db.models import SQLModel
+    from shared.db.database import Base
+    Base.metadata.create_all(engine)
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=4000)

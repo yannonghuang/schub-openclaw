@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+asyncpg
+redis==4.6.0
+python-dotenv

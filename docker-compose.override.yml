@@ -1,0 +1,61 @@
+services:
+  auth-service:
+    build:
+      target: dev
+    image: schub-auth:dev
+    volumes:
+      - ./services/auth:/app
+      - ./shared:/app/shared
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "4000", "--reload"]
+
+  switch-service:
+    build:
+      target: dev
+    image: schub-switch:dev
+    volumes:
+      - ./services/switch:/app
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "6000", "--reload"]
+
+  geopol-service:
+    build:
+      target: dev
+    image: schub-geopol:dev
+    volumes:
+      - ./services/geopol:/app
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8500", "--reload"]
+
+  adaptor-service:
+    build:
+      target: dev
+    image: schub-adaptor:dev
+    volumes:
+      - ./services/adaptor:/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8600", "--reload"]
+
+
+  audit-service:
+    build:
+      target: dev
+    image: schub-audit:dev
+    volumes:
+      - ./services/audit:/app
+      - ./services/auth/data:/app/data
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9000", "--reload"]
+
+  frontend-service:
+    build:
+      target: dev
+    image: schub-frontend:dev
+    volumes:
+      - ./frontend:/app
+      - ./frontend/node_modules:/app/node_modules
+
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+    # Run 'npm install' once in ./frontend on the host if node_modules is missing
+    command: ["npm", "run", "dev"]
+
+
+#volumes:
+#  frontend-node-modules:

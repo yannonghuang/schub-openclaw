@@ -1,0 +1,111 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* global.css (or component-level) */
+.edge-tooltip {
+  background: rgba(17, 24, 39, 0.95);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  white-space: pre-wrap;
+  max-width: 320px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+}
+.edge-tooltip.hidden {
+  display: none;
+}
+
+.filter-panel {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fafafa;
+}
+
+.filter-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.filter-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.clear-btn {
+  font-size: 12px;
+  background: none;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.filter-item label {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.filter-item input {
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #d1d5db;
+}
+
+.active-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.chip {
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 999px;
+}
+
+.details-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.audit-table td,
+.audit-table th {
+  vertical-align: middle;
+}
+
+.color-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.details-panel {
+  transition: border-color 180ms ease;
+}
+
+.node-details h4 {
+  transition: border-color 180ms ease;
+}

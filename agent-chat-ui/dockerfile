@@ -1,0 +1,41 @@
+# === Base stage ===
+FROM node:20-alpine AS base
+WORKDIR /app
+
+# Enable Corepack
+RUN corepack enable pnpm
+
+COPY package.json pnpm-lock.* ./
+#RUN npm ci
+
+RUN pnpm install
+
+# === Development stage ===
+FROM base AS dev
+WORKDIR /app
+COPY --from=base /app/node_modules ./node_modules
+COPY . .
+#RUN pnpm install
+EXPOSE 3500
+ENV PORT=3500
+CMD ["pnpm", "dev"]
+
+# === Production build stage ===
+FROM base AS builder
+WORKDIR /app
+COPY . .
+
+RUN pnpm run build
+
+# === Production runtime stage ===
+#FROM node:20-alpine AS prod
+FROM builder AS prod
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=builder /app/.next .next
+COPY --from=builder /app/public public
+COPY --from=builder /app/package.json package.json
+COPY --from=builder /app/node_modules node_modules
+EXPOSE 3500
+ENV PORT=3500
+CMD ["pnpm", "start"]

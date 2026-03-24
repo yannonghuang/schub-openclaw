@@ -1,0 +1,25 @@
+Production
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+
+Development
+
+docker compose up --build -d (equivalent: docker compose -f docker-compose.yml -f docker-compose.override.yml up --build -d)
+docker compose  down (equivalent: docker compose -f docker-compose.yml -f docker-compose.override.yml down)  
+
+
+Seeding the datbaase
+
+cd services/auth;
+python seed_db; (run twice: first with BUSINESS_START_ID = 100; then BUSINESS_START_ID = 500)
+python seed_materials;
+python seed_locations;
+python seed_transportations;
+
+
+update database
+
+alembic revision --autogenerate -m "create threads"
+alembic upgrade head
+alembic stamp 3f4915efc9a5

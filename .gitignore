@@ -1,0 +1,11 @@
+**/__pycache__/
+.claude/
+
+.next/
+bom-rewrite-solve/data/*
+data/*
+bom-rewrite-solve/_data/*
+
+# IMAP adaptor runtime state
+services/adaptor/app/.imap_state.json
+.env
