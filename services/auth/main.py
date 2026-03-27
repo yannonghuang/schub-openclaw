@@ -5,7 +5,7 @@ from data.models import User, Business, Invite, Base
 import os
 import logging
 from fastapi import FastAPI
-from routes import business, auth, material, mcp, tool, transportation, location, subagent, thread, system, async_jobs
+from routes import business, auth, material, mcp, tool, transportation, location, subagent, thread, system, async_jobs, email
 import uvicorn
 
 app = FastAPI()
@@ -41,6 +41,7 @@ app.include_router(subagent.router, prefix="/subagent", tags=["subagent"])
 app.include_router(thread.router, prefix="/thread", tags=["thread"])
 app.include_router(system.router, prefix="/system", tags=["system"])
 app.include_router(async_jobs.router, prefix="/async-jobs", tags=["async-jobs"])
+app.include_router(email.router, tags=["email"])
 
 
 @app.on_event("startup")

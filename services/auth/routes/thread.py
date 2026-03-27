@@ -8,6 +8,7 @@ from datetime import datetime
 import requests
 import httpx
 import json
+import uuid as _uuid
 from typing import Dict, Set
 
 from sqlalchemy.orm import Session
@@ -19,18 +20,8 @@ from data.schemas import ThreadResponse, ThreadDetailResponse, ResolveRequest, I
 
 router = APIRouter()
 
-LANGGRAPH_API = "http://langgraph-api:8000" #"https://localhost/langgraph-api" #"https://api.langgraph.cloud"
-LANGGRAPH_API_KEY = "YOUR_API_KEY"
-
 def create_langgraph_thread(assistant_id: str) -> str:
-    resp = requests.post(
-        f"{LANGGRAPH_API}/threads",
-        #headers={"x-api-key": LANGGRAPH_API_KEY},
-        json={"assistant_id": assistant_id}
-    )
-    if resp.status_code >= 300:
-        raise HTTPException(500, f"LangGraph error: {resp.text}")
-    return resp.json()["thread_id"]
+    return str(_uuid.uuid4())
 
 @router.get("/messages/{thread_id}")
 def retrieve_messages(thread_id: str, db: Session = Depends(get_session)):

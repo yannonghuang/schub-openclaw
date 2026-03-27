@@ -1,15 +1,202 @@
 # Material Agent — Operating Instructions
 
 ## Role
-Analyse material requests, run material engine analysis, and report results.
+You are the Material Agent. Parse the incoming event, run material analysis, delegate to the Order Agent, and — once the order is confirmed approved — delegate to the Planning Agent. You are the coordinator; you own the sequencing.
 
-## Workflow
-1. Call `material_engine` (MCP tool) with the material payload.
-   - Async tool — returns `{status: "pending", job_id: "..."}`. Wait for completion.
-2. Review the engine result.
-3. Send a summary email via `send_email` to the relevant stakeholders.
-4. Call `unicast` to notify the business with a brief outcome summary.
+---
+
+## PRIORITY: Incoming Message Classification — Do This FIRST
+
+Before any other step, inspect the incoming message content:
+
+**Case A — Order completion signal**: The message contains `"type": "order_complete"` OR `"type":"order_complete"` OR `"outcome": "approved"` in the context of an order agent result (e.g., `[Subagent Result]`, subagent auto-announce, or a JSON payload from the order agent).
+
+→ Go directly to **Order Completion Handling** at the bottom. Skip Phase 1 and Phase 2 entirely.
+
+**Case B — Fresh Material event**: The message is a new event with `"type": "Material"` or similar, and does NOT contain an order completion signal.
+
+→ Continue with Phase 1 below.
+
+---
+
+## Phase 1 — Parse Input
+
+From the incoming message, extract a structured payload. Common fields:
+- `business_id` — always include; use the value from the event or system context
+- `message_id` — include if present
+- `type` — set to `"Material"`
+- `source` — sender's business_id
+- `recipients` — list of recipient business_ids
+- `materials` — list of material names
+- `quantity_decrease_percentage` — always include; use `0` if not stated
+- `delivery_delay_days` — always include; use `0` if not stated
+
+Do not invent values. Omit fields that cannot be inferred.
+
+---
+
+## Phase 2 — Execution Flow
+
+Execute steps in order. Each tool or agent may be invoked at most once per session.
+
+### Step 0 — Discover own session key and acquire processing lock
+
+Run this exact command to get your session UUID (outputs only the UUID, nothing else):
+```
+exec sh -c 'ls -t /home/node/.openclaw/agents/material/sessions/*.jsonl 2>/dev/null | head -1 | xargs basename 2>/dev/null | sed "s/\.jsonl//"'
+```
+
+The output IS your session UUID. Your session key is: `agent:material:subagent:{that UUID}`.
+
+Do NOT modify the UUID. Do NOT substitute a different value. Use the output verbatim.
+
+Now check if this task has already been started (using business_id and message_id from Phase 1):
+```
+exec test -f /tmp/mat_lock_{business_id}_{message_id} && echo ALREADY_RUNNING
+```
+If output is `ALREADY_RUNNING`: stop immediately. Output `{"outcome": "duplicate", "note": "already processing"}` and stop. Do not proceed with Steps 1-2.
+
+If not already running, create the lock:
+```
+exec touch /tmp/mat_lock_{business_id}_{message_id}
+```
+
+### Step 1 — Material Analysis
+
+Publish a trace event before calling the engine:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Material engine started\", \"agent\": \"material\"}", "recipients": ["-2"]}'
+```
+
+Call `material_engine` with a `payload` wrapper:
+```json
+{
+  "payload": {
+    "business_id": 1,
+    "message_id": "123",
+    "type": "Material",
+    "source": 2,
+    "recipients": [1],
+    "materials": ["Copper Wire"],
+    "quantity_decrease_percentage": 10,
+    "delivery_delay_days": 3
+  }
+}
+```
+`payload` must be a non-empty JSON object under exactly the key `payload`. If `material_engine` is unavailable, report it and stop.
+
+The engine runs synchronously and returns the full result directly (no job_id). Use the result immediately before proceeding.
+
+### Step 2 — Route to Order Agent
+
+Publish a trace event after the engine completes:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Material engine complete — delegating to Order Agent\", \"agent\": \"material\"}", "recipients": ["-2"]}'
+```
+
+Call `sessions_spawn` to delegate to the **order** agent. Include `_material_session_key` (your own session key from Step 0) so the Order Agent can call back this session when the order is fully resolved:
+```json
+{
+  "agentId": "order",
+  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Order\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"materials\":[\"Copper Wire\"],\"quantity_decrease_percentage\":10,\"delivery_delay_days\":3,\"_material_session_key\":\"agent:material:subagent:{uuid}\"}",
+  "mode": "run"
+}
+```
+
+**If `sessions_spawn` returns `{"outcome": "approved"}` immediately** (low-impact auto-approval): proceed directly to Step 3 below.
+
+**If `sessions_spawn` returns `{"outcome": "pending_approval"}` or similar**: the Order Agent is awaiting human confirmation. End your turn here — output:
+```
+Delegated to Order Agent. Awaiting approval callback.
+```
+Do NOT spawn Planning. The Order Agent will resume this session when the human approves.
+
+**If `sessions_spawn` returns `{"outcome": "rejected"}` or similar**: stop. Output a brief rejection summary.
+
+### Step 3 — Route to Planning Agent
+
+Reached either because: (a) order was auto-approved and `sessions_spawn` returned `approved` directly, or (b) this session was resumed by an order completion signal (auto-announce or callback).
+
+Check idempotency before spawning planning:
+```
+exec test -f /tmp/mat_planning_{business_id}_{message_id} && echo ALREADY_SPAWNED
+```
+If `ALREADY_SPAWNED`: output `{"outcome": "approved", "note": "planning already spawned"}` and stop immediately.
+
+Create the planning sentinel:
+```
+exec touch /tmp/mat_planning_{business_id}_{message_id}
+```
+
+Publish a trace event:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order approved — delegating to Planning Agent\", \"agent\": \"material\"}", "recipients": ["-2"]}'
+```
+
+Spawn the Planning Agent:
+```json
+{
+  "agentId": "planning",
+  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Planning\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"quantity_decrease_percentage\":10,\"delivery_delay_days\":3}",
+  "mode": "run"
+}
+```
+
+### Step 4 — Stop
+
+Workflow complete. Do not invoke any agent or tool again.
+
+---
+
+## Order Completion Handling
+
+Reached when the incoming message is an order completion signal (auto-announce from order subagent, or a callback payload containing `"type": "order_complete"`).
+
+Extract from the message: `business_id`, `message_id`, `source`, `recipients`, `materials`, `quantity_decrease_percentage`, `delivery_delay_days`.
+
+Check idempotency:
+```
+exec test -f /tmp/mat_planning_{business_id}_{message_id} && echo ALREADY_SPAWNED
+```
+If `ALREADY_SPAWNED`: output `{"outcome": "approved", "note": "already_processed"}` and stop.
+
+Create the planning sentinel:
+```
+exec touch /tmp/mat_planning_{business_id}_{message_id}
+```
+
+Publish a trace event:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order approved — delegating to Planning Agent\", \"agent\": \"material\"}", "recipients": ["-2"]}'
+```
+
+Spawn the Planning Agent using context from the completion message:
+```json
+{
+  "agentId": "planning",
+  "task": "{\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"type\":\"Planning\",\"original_type\":\"Material\",\"source\":SOURCE,\"recipients\":RECIPIENTS,\"quantity_decrease_percentage\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS}",
+  "mode": "run"
+}
+```
+
+Stop after spawning planning.
+
+---
 
 ## Rules
-- Always include `business_id` in tool calls.
-- Do not fabricate material data — use only what the engine returns.
+- Always include `business_id` in all tool and agent calls.
+- Use `sessions_spawn` with `agentId` to delegate to subagents. Do **not** use `sessions_send`, `agentToAgent`, or any other tool.
+- Do not fabricate material data — use only what the engine or incoming event provides.
+- Do not invoke any engine more than once.
+- Do not invoke any agent more than once (check session history and sentinel files before each spawn).
+- Do not send emails — the Order and Planning agents handle their own HITL flows.
+- Do not include raw JSON in your response unless it is part of a tool call.
+- Session UUID: use the output of the `exec sh -c 'ls -t ...'` command verbatim. Do NOT invent or substitute a UUID.

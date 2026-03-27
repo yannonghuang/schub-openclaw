@@ -1,14 +1,14 @@
 ---
-requires:
-  env: [BACKEND_URL]
+name: async-job
+description: "Poll a background async job submitted by an engine tool (order_engine, material_engine, supply_chain_engine, mes_engine) and wait for its result."
+metadata: { "openclaw": { "requires": { "env": ["BACKEND_URL"] } } }
 ---
 # async_job
 
 Monitor a background async job submitted by an engine tool and wait for its completion.
 
 ## Usage
-After an engine tool (order_engine, material_engine, supply_chain_engine, mes_engine) returns
-`{status: "pending", job_id: "..."}`, call this skill to wait for the job result.
+After an engine tool returns `{status: "pending", job_id: "..."}`, call this skill to wait for the job result.
 
 Parameters:
 - `job_id`: the job ID returned by the engine tool

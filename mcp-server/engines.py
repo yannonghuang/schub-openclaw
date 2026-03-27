@@ -10,7 +10,7 @@ import uuid
 from typing import Any, Dict
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel, RootModel
+from pydantic import BaseModel
 
 # ---------------------------
 # Safe math evaluator
@@ -63,18 +63,14 @@ class CalculatorOutput(BaseModel):
 
 
 @mcp.tool()
-async def calculate_expression(input: CalculatorInput) -> CalculatorOutput:
+async def calculate_expression(input: CalculatorInput):
     """Calculates a mathematical expression safely."""
     result = safe_eval(input.expression)
     return CalculatorOutput(result=result)
 
 
-class SupplyChainInput(RootModel[Dict[str, Any]]):
-    pass
-
-
 @mcp_supply_chain_engine.tool()
-async def supply_chain_engine(payload: SupplyChainInput) -> Dict[str, Any]:
+async def supply_chain_engine(payload: Dict[str, Any]):
     """
     Supply Chain engine tool.
 
@@ -95,7 +91,7 @@ async def supply_chain_engine(payload: SupplyChainInput) -> Dict[str, Any]:
       }
     }
     """
-    data = payload.root
+    data = payload
     print(f"supply_chain_engine() input payload: {data}")
 
     business_id = data.get("business_id")
@@ -120,12 +116,8 @@ async def supply_chain_engine(payload: SupplyChainInput) -> Dict[str, Any]:
     }
 
 
-class MESInput(RootModel[Dict[str, Any]]):
-    pass
-
-
 @mcp_mes_engine.tool()
-async def mes_engine(payload: MESInput) -> Dict[str, Any]:
+async def mes_engine(payload: Dict[str, Any]):
     """
     MES engine tool.
 
@@ -146,7 +138,7 @@ async def mes_engine(payload: MESInput) -> Dict[str, Any]:
       }
     }
     """
-    data = payload.root
+    data = payload
     print(f"mes_engine() input payload: {data}")
 
     business_id = data.get("business_id")
@@ -169,10 +161,6 @@ async def mes_engine(payload: MESInput) -> Dict[str, Any]:
         "source": source,
         "recipients": recipients,
     }
-
-
-class OrderInput(RootModel[Dict[str, Any]]):
-    pass
 
 
 async def _order_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -200,7 +188,7 @@ async def _order_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @mcp_order_engine.tool()
-async def order_engine(payload: OrderInput) -> Dict[str, Any]:
+async def order_engine(payload: Dict[str, Any]):
     """
     Order engine tool. Runs asynchronously — returns immediately with a job token.
 
@@ -224,12 +212,14 @@ async def order_engine(payload: OrderInput) -> Dict[str, Any]:
     """
     import job_store as _js
 
-    data = dict(payload.root)
+    data = dict(payload)
     thread_id = data.pop("_thread_id", None)
+    session_key = data.pop("_session_key", None)
+    agent_id = data.pop("_agent_id", None)
     business_id = data.get("business_id", 0)
     job_id = str(uuid.uuid4())
 
-    print(f"order_engine() submitting async job {job_id} for thread {thread_id}")
+    print(f"order_engine() submitting async job {job_id} for session {session_key or thread_id!r}")
 
     await _js.submit_job(
         job_id=job_id,
@@ -238,6 +228,8 @@ async def order_engine(payload: OrderInput) -> Dict[str, Any]:
         engine_name="order_engine",
         payload=data,
         engine_fn=_order_engine_body,
+        session_key=session_key,
+        agent_id=agent_id,
     )
 
     return {
@@ -247,12 +239,8 @@ async def order_engine(payload: OrderInput) -> Dict[str, Any]:
     }
 
 
-class MaterialInput(RootModel[Dict[str, Any]]):
-    pass
-
-
 @mcp_material_engine.tool()
-async def material_engine(payload: MaterialInput) -> Dict[str, Any]:
+async def material_engine(payload: Dict[str, Any]):
     """
     material engine tool.
 
@@ -273,7 +261,7 @@ async def material_engine(payload: MaterialInput) -> Dict[str, Any]:
       }
     }
     """
-    data = payload.root
+    data = payload
     print(f"material_engine() input payload: {data}")
 
     business_id = data.get("business_id")

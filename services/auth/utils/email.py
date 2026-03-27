@@ -6,12 +6,12 @@ def send_mail(
     frontend_url: str, 
     token: str,
     businessStr: str = None, # reset if None, invite if not None
-    smtp_host: str = "smtp.mail.me.com",
+    smtp_host: str = "smtp.gmail.com",
     smtp_port: int = 587,
-    username: str = "yannonghuang@icloud.com",
-    password: str = "shhv-dwza-dngo-mrvb",
+    username: str = "",
+    password: str = "",
     #subject: str = "Password reset",
-    from_addr: str = "yannonghuang@icloud.com",
+    from_addr: str = "",
 ):
     link = f"{frontend_url}/reset-password?token={token}" if businessStr is None else f"{frontend_url}/signup?{businessStr}"
 
