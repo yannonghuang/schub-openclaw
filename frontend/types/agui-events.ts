@@ -58,9 +58,83 @@ export interface HITLReplyEvent extends AGUIBaseEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Run lifecycle events  (emitted by /agui/chat proxy)
+// ---------------------------------------------------------------------------
+export interface RunStartedEvent extends AGUIBaseEvent {
+  type: "RunStarted";
+  runId: string;
+  threadId: string;
+}
+
+export interface RunFinishedEvent extends AGUIBaseEvent {
+  type: "RunFinished";
+  runId: string;
+  threadId: string;
+}
+
+export interface RunErrorEvent extends AGUIBaseEvent {
+  type: "RunError";
+  message: string;
+  runId: string;
+  threadId: string;
+}
+
+// ---------------------------------------------------------------------------
+// Text message streaming events  (emitted by /agui/chat proxy)
+// ---------------------------------------------------------------------------
+export interface TextMessageStartEvent extends AGUIBaseEvent {
+  type: "TextMessageStart";
+  messageId: string;
+  runId: string;
+  threadId: string;
+  role: "assistant";
+}
+
+export interface TextMessageContentEvent extends AGUIBaseEvent {
+  type: "TextMessageContent";
+  messageId: string;
+  delta: string;
+}
+
+export interface TextMessageEndEvent extends AGUIBaseEvent {
+  type: "TextMessageEnd";
+  messageId: string;
+  runId: string;
+  threadId: string;
+}
+
+// ---------------------------------------------------------------------------
+// Tool call streaming events  (emitted by /agui/chat proxy)
+// ---------------------------------------------------------------------------
+export interface ToolCallStartEvent extends AGUIBaseEvent {
+  type: "ToolCallStart";
+  toolCallId: string;
+  toolCallName: string;
+  runId: string;
+  threadId: string;
+}
+
+export interface ToolCallArgsEvent extends AGUIBaseEvent {
+  type: "ToolCallArgs";
+  toolCallId: string;
+  delta: string;
+}
+
+// ---------------------------------------------------------------------------
 // Discriminated union of all switch-service events
 // ---------------------------------------------------------------------------
-export type SwitchEvent = ToolCallEndEvent | TraceEvent | HITLReplyEvent;
+export type SwitchEvent =
+  | ToolCallEndEvent
+  | TraceEvent
+  | HITLReplyEvent
+  | RunStartedEvent
+  | RunFinishedEvent
+  | RunErrorEvent
+  | TextMessageStartEvent
+  | TextMessageContentEvent
+  | TextMessageEndEvent
+  | ToolCallStartEvent
+  | ToolCallArgsEvent;
 
 // ---------------------------------------------------------------------------
 // Legacy wire formats — accepted by useAGUIStream normalizer during migration
