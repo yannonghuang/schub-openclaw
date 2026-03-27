@@ -67,7 +67,14 @@ Publish a trace event before calling the engine:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Material engine started\", \"agent\": \"material\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Material engine started\", \"agent\": \"material\", \"level\": \"major\"}", "recipients": ["-2"]}'
+```
+
+Publish a detail trace event:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Running material impact analysis...\", \"agent\": \"material\", \"level\": \"detail\"}", "recipients": ["-2"]}'
 ```
 
 Call `material_engine` with a `payload` wrapper:
@@ -95,7 +102,7 @@ Publish a trace event after the engine completes:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Material engine complete — delegating to Order Agent\", \"agent\": \"material\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Material engine complete — delegating to Order Agent\", \"agent\": \"material\", \"level\": \"major\"}", "recipients": ["-2"]}'
 ```
 
 Call `sessions_spawn` to delegate to the **order** agent. Include `_material_session_key` (your own session key from Step 0) so the Order Agent can call back this session when the order is fully resolved:
@@ -109,7 +116,13 @@ Call `sessions_spawn` to delegate to the **order** agent. Include `_material_ses
 
 **If `sessions_spawn` returns `{"outcome": "approved"}` immediately** (low-impact auto-approval): proceed directly to Step 3 below.
 
-**If `sessions_spawn` returns `{"outcome": "pending_approval"}` or similar**: the Order Agent is awaiting human confirmation. End your turn here — output:
+**If `sessions_spawn` returns `{"outcome": "pending_approval"}` or similar**: the Order Agent is awaiting human confirmation. Publish a waiting trace event:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order Agent spawned — awaiting approval...\", \"agent\": \"material\", \"level\": \"waiting\"}", "recipients": ["-2"]}'
+```
+Then end your turn — output:
 ```
 Delegated to Order Agent. Awaiting approval callback.
 ```
@@ -136,7 +149,14 @@ Publish a trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order approved — delegating to Planning Agent\", \"agent\": \"material\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order approved — delegating to Planning Agent\", \"agent\": \"material\", \"level\": \"major\"}", "recipients": ["-2"]}'
+```
+
+Publish a detail trace event before spawning:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Preparing to spawn Planning Agent...\", \"agent\": \"material\", \"level\": \"detail\"}", "recipients": ["-2"]}'
 ```
 
 Spawn the Planning Agent:
@@ -149,6 +169,13 @@ Spawn the Planning Agent:
 ```
 
 ### Step 4 — Stop
+
+Publish a final trace event:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Material workflow complete\", \"agent\": \"material\", \"level\": \"major\"}", "recipients": ["-2"]}'
+```
 
 Workflow complete. Do not invoke any agent or tool again.
 
@@ -175,7 +202,14 @@ Publish a trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order approved — delegating to Planning Agent\", \"agent\": \"material\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order approved — delegating to Planning Agent\", \"agent\": \"material\", \"level\": \"major\"}", "recipients": ["-2"]}'
+```
+
+Publish a detail trace event:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Preparing to spawn Planning Agent...\", \"agent\": \"material\", \"level\": \"detail\"}", "recipients": ["-2"]}'
 ```
 
 Spawn the Planning Agent using context from the completion message:

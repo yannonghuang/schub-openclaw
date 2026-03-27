@@ -11,6 +11,7 @@ interface StepEvent {
   label: string;
   agent?: string;
   ts: number;
+  level?: "major" | "detail" | "waiting";
 }
 
 /* ------------------------------------------------------------------ */
@@ -53,14 +54,30 @@ function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowAct
       </div>
       {steps.map((s, i) => {
         const isLast = i === steps.length - 1;
+        const level = s.level ?? "major";
+        const isDetail = level === "detail";
+        const isWaiting = level === "waiting";
+        const activeStep = workflowActive && isLast;
+
+        let indicator: React.ReactNode;
+        if (activeStep && isWaiting) {
+          indicator = <span className="text-blue-400 flex-shrink-0 animate-pulse">⏳</span>;
+        } else if (activeStep && !isDetail) {
+          indicator = <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />;
+        } else if (isDetail) {
+          indicator = <span className="text-gray-300 flex-shrink-0">·</span>;
+        } else {
+          indicator = <span className="text-green-500 flex-shrink-0">✓</span>;
+        }
+
+        const labelClass = activeStep
+          ? isWaiting ? "text-blue-500 italic" : "text-blue-600 font-medium"
+          : isDetail ? "text-gray-400" : "text-gray-600";
+
         return (
-          <div key={i} className="flex items-center gap-2">
-            {workflowActive && isLast ? (
-              <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-            ) : (
-              <span className="text-green-500 flex-shrink-0">✓</span>
-            )}
-            <span className={workflowActive && isLast ? "text-blue-600 font-medium" : "text-gray-600"}>
+          <div key={i} className={`flex items-center gap-2 ${isDetail ? "pl-3" : ""}`}>
+            {indicator}
+            <span className={`${isDetail ? "text-[11px]" : "text-xs"} ${labelClass}`}>
               {s.agent ? `[${s.agent}] ` : ""}{s.label}
             </span>
           </div>
@@ -354,7 +371,7 @@ export default function Agent({
     (payload) => {
       setTraceSteps((prev) => [
         ...prev,
-        { label: payload.step ?? payload.message ?? "(trace)", agent: payload.agent, ts: Date.now() },
+        { label: payload.step ?? payload.message ?? "(trace)", agent: payload.agent, ts: Date.now(), level: payload.level },
       ]);
       setWorkflowActive(true);
       if (workflowTimerRef.current) clearTimeout(workflowTimerRef.current);
