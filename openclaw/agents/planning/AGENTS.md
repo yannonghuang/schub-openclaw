@@ -31,7 +31,7 @@ Publish a trace event before calling the engine:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Supply chain engine started\", \"agent\": \"planning\", \"level\": \"major\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Supply chain engine started\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Call `supply_chain_engine` once with a `payload` wrapper:
@@ -60,7 +60,7 @@ Publish a trace event with the impact:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Supply chain engine complete — impact: IMPACT\", \"agent\": \"planning\", \"level\": \"major\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Supply chain engine complete — impact: IMPACT\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 Replace IMPACT with the actual impact value from the result.
 
@@ -70,12 +70,12 @@ Inspect the `impact` field:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Composing supply chain approval request...\", \"agent\": \"planning\", \"level\": \"detail\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Composing supply chain approval request...\", \"agent\": \"planning\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Approval email sent — awaiting human confirmation...\", \"agent\": \"planning\", \"level\": \"waiting\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Approval email sent — awaiting human confirmation...\", \"agent\": \"planning\", \"level\": \"waiting\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 - Do not send the same email more than once.
 
@@ -85,14 +85,14 @@ Publish a trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Planning approved — sending notification\", \"agent\": \"planning\", \"level\": \"major\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Planning approved — sending notification\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Publish a detail trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Sending supply chain result to source business...\", \"agent\": \"planning\", \"level\": \"detail\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Sending supply chain result to source business...\", \"agent\": \"planning\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Send a notification email to the source business using the `send_email` skill (or exec curl if unavailable):
@@ -106,7 +106,7 @@ Publish a final trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Planning complete\", \"agent\": \"planning\", \"level\": \"major\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Planning complete\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Then terminate.

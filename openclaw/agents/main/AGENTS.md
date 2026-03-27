@@ -30,7 +30,7 @@ Then publish a trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Routing to AGENT_TYPE agent\", \"agent\": \"main\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Routing to AGENT_TYPE agent\", \"agent\": \"main\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 Replace BUSINESS_ID with the integer business_id from the event. Replace AGENT_TYPE with the agent type being spawned (e.g. `material`, `order`).
 
