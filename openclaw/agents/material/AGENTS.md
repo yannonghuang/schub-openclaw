@@ -177,6 +177,11 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Material workflow complete\", \"agent\": \"material\", \"level\": \"major\"}", "recipients": ["-2"]}'
 ```
 
+Clean up lock files so future events with the same ids can be processed:
+```
+exec sh -c 'rm -f /tmp/mat_lock_BUSINESS_ID_MESSAGE_ID /tmp/mat_planning_BUSINESS_ID_MESSAGE_ID'
+```
+
 Workflow complete. Do not invoke any agent or tool again.
 
 ---
