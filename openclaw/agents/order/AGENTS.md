@@ -48,6 +48,12 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order engine started\", \"agent\": \"order\"}", "recipients": ["-2"]}'
 ```
 
+Before submitting the job, persist the full task context (including `_material_session_key`) to a temp file so the callback session can recover it:
+```
+exec sh -c 'echo "{\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"quantity_decrease_percentage\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS,\"_material_session_key\":\"MATERIAL_SESSION_KEY\"}" > /tmp/order_ctx_BUSINESS_ID_MESSAGE_ID.json'
+```
+Replace all placeholders with actual values. If `_material_session_key` is absent, omit that field but still write the file.
+
 Call `order_engine` once with a `payload` wrapper. Include `_session_key` and `_agent_id` so the engine can resume this session when the job finishes:
 ```json
 {
@@ -94,6 +100,12 @@ When approved (either auto or via human reply resuming this session):
 
 **Idempotency check first**: scan your session history. If a prior turn already completed Step 3 (callback to `_material_session_key` was already sent, or notification email already sent), output `{"outcome": "approved", "note": "already_processed"}` and stop immediately.
 
+**Recover task context**: read the context file written in Step 1 to recover `_material_session_key` and other fields:
+```
+exec cat /tmp/order_ctx_BUSINESS_ID_MESSAGE_ID.json
+```
+Replace BUSINESS_ID and MESSAGE_ID with the values from the job result.
+
 Publish a trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
@@ -111,7 +123,7 @@ exec curl -s -X POST http://auth-service:4000/send-email \
 If `_material_session_key` is present in the original task, call back the material session so it can continue its workflow (spawn Planning Agent). Include the **full original event context** so the material session has everything needed to spawn planning:
 ```
 exec curl -s -X POST http://openclaw:18789/v1/chat/completions \
-  -H 'Authorization: Bearer c34d9510b42222e8ff613d22f2d3dfc80b4eeb818aee7acc' \
+  -H "Authorization: Bearer ${OPENCLAW_TOKEN}" \
   -H 'x-openclaw-session-key: MATERIAL_SESSION_KEY' \
   -H 'Content-Type: application/json' \
   -d '{"model":"openclaw:material","messages":[{"role":"user","content":"{\"type\":\"order_complete\",\"outcome\":\"approved\",\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"quantity_decrease_percentage\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS}"}],"stream":true}' \
