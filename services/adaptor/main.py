@@ -36,6 +36,7 @@ POLL_INTERVAL  = int(os.getenv("POLL_INTERVAL", "30"))   # seconds
 BACKEND_URL    = os.getenv("BACKEND_URL", "http://auth-service:4000")
 OPENCLAW_URL   = os.getenv("OPENCLAW_URL", "http://openclaw:18789")
 OPENCLAW_TOKEN = os.getenv("OPENCLAW_TOKEN", "c34d9510b42222e8ff613d22f2d3dfc80b4eeb818aee7acc")
+SWITCH_URL     = os.getenv("SWITCH_URL", "http://switch-service:6000/publish")
 SEEN_FILE      = os.getenv("SEEN_FILE", "/tmp/adaptor_seen.json")
 
 
@@ -222,6 +223,31 @@ def process_message(uid: bytes, raw: bytes) -> None:
         httpx.put(f"{BACKEND_URL}/email-hitl/{original_id}/resume", timeout=10)
     except Exception as e:
         log.warning("Failed to mark HITL as resumed: %s", e)
+
+    # Publish schub/hitl_reply so the Agent UI knows the email was handled
+    try:
+        httpx.post(
+            SWITCH_URL,
+            json={
+                "sender": "-1",
+                "content": json.dumps({
+                    "type": "CustomEvent",
+                    "name": "schub/hitl_reply",
+                    "value": {
+                        "threadId": hitl["session_key"],
+                        "approved": classification == "approved",
+                        "messageContent": body[:200],
+                        "idempotencyKey": f"email:{original_id}",
+                        "businessId": hitl.get("business_id"),
+                    },
+                    "timestamp": int(time.time() * 1000),
+                }),
+                "recipients": ["-2"],
+            },
+            timeout=5,
+        )
+    except Exception as e:
+        log.warning("Failed to publish schub/hitl_reply: %s", e)
 
 
 def poll_once(imap: imaplib.IMAP4_SSL) -> None:

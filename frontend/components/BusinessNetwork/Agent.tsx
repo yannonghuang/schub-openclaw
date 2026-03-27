@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { Resizable } from "re-resizable";
-import { useAGUIStream } from "../../hooks/useAGUIStream";
+import { useAGUIStream, type ChatMessage } from "../../hooks/useAGUIStream";
 import type { TraceEvent, ToolCallEndEvent, HITLReplyEvent } from "../../types/agui-events";
 
 /* ------------------------------------------------------------------ */
@@ -13,17 +13,6 @@ interface StepEvent {
   agent?: string;
   ts: number;
   level?: "major" | "detail" | "waiting";
-}
-
-/* ------------------------------------------------------------------ */
-/* Message type                                                        */
-/* ------------------------------------------------------------------ */
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant" | "tool";
-  content: string;
-  created_at?: string;
-  tool_calls?: Array<{ name: string; id: string }>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -103,129 +92,6 @@ function normalizeContent(raw: any, isStreaming = false): string {
 }
 
 /* ------------------------------------------------------------------ */
-/* OpenClaw SSE streaming hook                                         */
-/* ------------------------------------------------------------------ */
-function useOpenClawStream(sessionKey: string | null) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-
-  const submit = useCallback(async (userContent: string) => {
-    if (!sessionKey) return;
-
-    const userMsg: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: userContent,
-      created_at: new Date().toISOString(),
-    };
-    setMessages((prev) => [...prev, userMsg]);
-    setIsLoading(true);
-
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-
-    const assistantId = crypto.randomUUID();
-
-    try {
-      const resp = await fetch("/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-openclaw-session-key": sessionKey,
-        },
-        body: JSON.stringify({
-          model: "openclaw:main",
-          messages: [{ role: "user", content: userContent }],
-          stream: true,
-        }),
-        signal: ctrl.signal,
-      });
-
-      if (!resp.ok || !resp.body) {
-        throw new Error(`HTTP ${resp.status}`);
-      }
-
-      let assistantContent = "";
-      const toolCalls: Array<{ name: string; id: string }> = [];
-
-      // Add assistant placeholder
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: assistantId,
-          role: "assistant",
-          content: "",
-          created_at: new Date().toISOString(),
-          tool_calls: [],
-        },
-      ]);
-
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
-          if (data === "[DONE]") continue;
-
-          try {
-            const chunk = JSON.parse(data);
-            const delta = chunk.choices?.[0]?.delta;
-            if (!delta) continue;
-
-            if (delta.content) {
-              assistantContent += delta.content;
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId ? { ...m, content: assistantContent } : m
-                )
-              );
-            }
-
-            if (delta.tool_calls) {
-              for (const tc of delta.tool_calls) {
-                if (tc.function?.name) {
-                  toolCalls.push({ name: tc.function.name, id: tc.id ?? "" });
-                  setMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === assistantId
-                        ? { ...m, tool_calls: [...toolCalls] }
-                        : m
-                    )
-                  );
-                }
-              }
-            }
-          } catch {
-            /* ignore partial chunk parse errors */
-          }
-        }
-      }
-    } catch (err: any) {
-      if (err.name !== "AbortError") {
-        console.error("[OpenClaw] Stream error:", err);
-        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }, [sessionKey]);
-
-  return { messages, setMessages, isLoading, submit };
-}
-
-/* ------------------------------------------------------------------ */
 /* Agent                                                               */
 /* ------------------------------------------------------------------ */
 export default function Agent({
@@ -245,10 +111,86 @@ export default function Agent({
   const [restoredMessages, setRestoredMessages] = useState<ChatMessage[]>([]);
   const savedMessageIds = useRef<Set<string>>(new Set());
 
-  const { messages, setMessages, isLoading, submit } = useOpenClawStream(resolvedThreadId);
   const [traceSteps, setTraceSteps] = useState<StepEvent[]>([]);
   const [workflowActive, setWorkflowActive] = useState(false);
   const workflowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* ------------------------------------------------------------------ */
+  /* AG-UI SSE stream — single channel for all events                   */
+  /* ------------------------------------------------------------------ */
+  const { chatMessages, addMessage, isLoading } = useAGUIStream(
+    businessId,
+    resolvedThreadId,
+    // onTraceEvent
+    (event: TraceEvent) => {
+      setTraceSteps((prev) => [
+        ...prev,
+        {
+          label: event.value.step,
+          agent: event.value.agent,
+          ts: event.timestamp ?? Date.now(),
+          level: event.value.level,
+        },
+      ]);
+      setWorkflowActive(true);
+      if (workflowTimerRef.current) clearTimeout(workflowTimerRef.current);
+      workflowTimerRef.current = setTimeout(() => setWorkflowActive(false), 30_000);
+    },
+    // onToolCallEnd — async job complete: resume OpenClaw via /agui/chat
+    async (event: ToolCallEndEvent) => {
+      if (!resolvedThreadId) return;
+      console.log("[Agent] ToolCallEnd → resuming via /agui/chat", event);
+      await submit(
+        JSON.stringify({
+          type: "async_tool_complete",
+          job_id: event.toolCallId,
+          job_result: event.output,
+        })
+      );
+    },
+    // onHITLReply — human email reply: resume OpenClaw via /agui/chat
+    async (event: HITLReplyEvent) => {
+      if (!resolvedThreadId) return;
+      console.log("[Agent] HITLReply → resuming via /agui/chat");
+      await submit(
+        JSON.stringify({
+          type: "email_received",
+          approved: event.value.approved,
+          raw_email: event.value.messageContent,
+        })
+      );
+    }
+  );
+
+  /* ------------------------------------------------------------------ */
+  /* submit — adds user message locally then POSTs to /agui/chat        */
+  /* ------------------------------------------------------------------ */
+  const submit = useCallback(async (userContent: string) => {
+    if (!resolvedThreadId) return;
+
+    const userMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: userContent,
+      created_at: new Date().toISOString(),
+    };
+    addMessage(userMsg);
+
+    try {
+      await fetch("/agui/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_key: resolvedThreadId,
+          messages: [{ role: "user", content: userContent }],
+          business_id: businessId,
+          thread_id: resolvedThreadId,
+        }),
+      });
+    } catch (err) {
+      console.error("[Agent] /agui/chat error:", err);
+    }
+  }, [resolvedThreadId, businessId, addMessage]);
 
   /* ------------------------------------------------------------------ */
   /* 1) Resolve external thread → OpenClaw session key                  */
@@ -301,9 +243,9 @@ export default function Agent({
   /* 2) Auto-save new messages to backend                               */
   /* ------------------------------------------------------------------ */
   useEffect(() => {
-    if (!resolvedThreadId || !messages.length || isLoading) return;
+    if (!resolvedThreadId || !chatMessages.length || isLoading) return;
 
-    for (const m of messages) {
+    for (const m of chatMessages) {
       if (savedMessageIds.current.has(m.id)) continue;
       savedMessageIds.current.add(m.id);
 
@@ -323,14 +265,14 @@ export default function Agent({
         }),
       }).catch((err) => console.error("Failed to save message:", err));
     }
-  }, [messages, resolvedThreadId, isLoading]);
+  }, [chatMessages, resolvedThreadId, isLoading]);
 
   /* ------------------------------------------------------------------ */
   /* 3) Derive step trace from assistant tool calls                     */
   /* ------------------------------------------------------------------ */
   const steps = useMemo<StepEvent[]>(() => {
     const result: StepEvent[] = [];
-    for (const m of messages) {
+    for (const m of chatMessages) {
       if (m.role === "assistant" && m.tool_calls?.length) {
         for (const tc of m.tool_calls) {
           result.push({ label: `Calling: ${tc.name}`, ts: 0 });
@@ -338,57 +280,10 @@ export default function Agent({
       }
     }
     return result;
-  }, [messages]);
+  }, [chatMessages]);
 
   /* ------------------------------------------------------------------ */
-  /* 4) AG-UI SSE stream — async job completions + trace events         */
-  /* ------------------------------------------------------------------ */
-  useAGUIStream(
-    businessId,
-    resolvedThreadId,
-    // onTraceEvent
-    (event: TraceEvent) => {
-      setTraceSteps((prev) => [
-        ...prev,
-        {
-          label: event.value.step,
-          agent: event.value.agent,
-          ts: event.timestamp ?? Date.now(),
-          level: event.value.level,
-        },
-      ]);
-      setWorkflowActive(true);
-      if (workflowTimerRef.current) clearTimeout(workflowTimerRef.current);
-      workflowTimerRef.current = setTimeout(() => setWorkflowActive(false), 30_000);
-    },
-    // onToolCallEnd
-    async (event: ToolCallEndEvent) => {
-      if (!resolvedThreadId) return;
-      console.log("[Agent] ToolCallEnd → forwarding to OpenClaw", event);
-      await submit(
-        JSON.stringify({
-          type: "async_tool_complete",
-          job_id: event.toolCallId,
-          job_result: event.output,
-        })
-      );
-    },
-    // onHITLReply
-    async (event: HITLReplyEvent) => {
-      if (!resolvedThreadId) return;
-      console.log("[Agent] HITLReply → forwarding to OpenClaw");
-      await submit(
-        JSON.stringify({
-          type: "email_received",
-          approved: event.value.approved,
-          raw_email: event.value.messageContent,
-        })
-      );
-    }
-  );
-
-  /* ------------------------------------------------------------------ */
-  /* 5) Send initial message once                                       */
+  /* 4) Send initial message once                                       */
   /* ------------------------------------------------------------------ */
   useEffect(() => {
     if (!resolvedThreadId) return;
@@ -404,7 +299,7 @@ export default function Agent({
   }, [resolvedThreadId, businessId, initialMessage]);
 
   /* ------------------------------------------------------------------ */
-  /* 6) User input                                                      */
+  /* 5) User input                                                      */
   /* ------------------------------------------------------------------ */
   const [userInput, setUserInput] = useState("");
 
@@ -419,9 +314,9 @@ export default function Agent({
   };
 
   /* ------------------------------------------------------------------ */
-  /* 7) Render                                                          */
+  /* 6) Render                                                          */
   /* ------------------------------------------------------------------ */
-  const allMessages = [...restoredMessages, ...messages];
+  const allMessages = [...restoredMessages, ...chatMessages];
 
   if (loadingInit) {
     return (

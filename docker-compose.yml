@@ -112,12 +112,14 @@ services:
       - BACKEND_URL=http://auth-service:4000
       - OPENCLAW_URL=http://openclaw:18789
       - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
+      - SWITCH_URL=http://switch-service:6000/publish
       - SEEN_FILE=/data/adaptor_seen.json
     volumes:
       - adaptor-data:/data
     depends_on:
       - auth-service
       - openclaw
+      - switch-service
     restart: unless-stopped
 
   switch-service:
@@ -126,8 +128,11 @@ services:
       dockerfile: services/switch/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379
+      - OPENCLAW_URL=http://openclaw:18789
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
     depends_on:
       - redis
+      - openclaw
     ports:
       - "6000:6000"
 

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, Header
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from data.schemas import Message
 from utils.redis import publish_message, get_redis_client, get_events_since
 import json
@@ -7,9 +8,13 @@ import asyncio
 import time
 import contextlib
 import os
+import uuid
+import httpx
 
-EMAIL_NODE = os.getenv("EMAIL_NODE", "-2")
+EMAIL_NODE     = os.getenv("EMAIL_NODE", "-2")
 AGUI_EVENT_TTL = int(os.getenv("AGUI_EVENT_TTL", "3600"))  # 1 hour
+OPENCLAW_URL   = os.getenv("OPENCLAW_URL", "http://openclaw:18789")
+OPENCLAW_TOKEN = os.getenv("OPENCLAW_TOKEN", "")
 
 PING_TIMEOUT = 30  # seconds
 REDIS_POLL_INTERVAL = 1.0
@@ -109,6 +114,135 @@ async def agui_sse(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# --- AG-UI chat proxy ---
+
+class AgUIChatRequest(BaseModel):
+    session_key: str
+    model: str = "openclaw:main"
+    messages: list
+    business_id: int
+    thread_id: str
+    run_id: str | None = None
+
+
+async def _publish_agui(business_id: int, event: dict) -> None:
+    """Publish an AG-UI event to the shared Redis stream (picked up by /sse/)."""
+    event["businessId"] = business_id
+    event.setdefault("timestamp", int(time.time() * 1000))
+    channel = f"business:{EMAIL_NODE}:channel"
+    await publish_message(channel, {"from": "-1", "text": json.dumps(event)})
+
+
+async def _run_agui_chat(req: AgUIChatRequest, run_id: str) -> None:
+    """Background task: proxy to OpenClaw SSE and emit AG-UI events into Redis."""
+    biz = req.business_id
+    await _publish_agui(biz, {
+        "type": "RunStarted", "runId": run_id, "threadId": req.thread_id,
+    })
+
+    message_id = str(uuid.uuid4())
+    message_started = False
+    tool_call_ids: dict[int, str] = {}
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+        ) as client:
+            async with client.stream(
+                "POST",
+                f"{OPENCLAW_URL}/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENCLAW_TOKEN}",
+                    "x-openclaw-session-key": req.session_key,
+                    "Content-Type": "application/json",
+                },
+                json={"model": req.model, "messages": req.messages, "stream": True},
+            ) as resp:
+                buffer = ""
+                async for chunk in resp.aiter_bytes():
+                    buffer += chunk.decode("utf-8", errors="replace")
+                    lines = buffer.split("\n")
+                    buffer = lines.pop()
+                    for line in lines:
+                        if not line.startswith("data: "):
+                            continue
+                        data = line[6:].strip()
+                        if data == "[DONE]":
+                            continue
+                        try:
+                            parsed = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        choices = parsed.get("choices")
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta", {})
+
+                        if delta.get("content"):
+                            if not message_started:
+                                message_started = True
+                                await _publish_agui(biz, {
+                                    "type": "TextMessageStart",
+                                    "messageId": message_id,
+                                    "runId": run_id,
+                                    "threadId": req.thread_id,
+                                    "role": "assistant",
+                                })
+                            await _publish_agui(biz, {
+                                "type": "TextMessageContent",
+                                "messageId": message_id,
+                                "delta": delta["content"],
+                            })
+
+                        for tc in delta.get("tool_calls") or []:
+                            idx = tc.get("index", 0)
+                            fn = tc.get("function") or {}
+                            if fn.get("name"):
+                                tc_id = tc.get("id") or str(uuid.uuid4())
+                                tool_call_ids[idx] = tc_id
+                                await _publish_agui(biz, {
+                                    "type": "ToolCallStart",
+                                    "toolCallId": tc_id,
+                                    "toolCallName": fn["name"],
+                                    "runId": run_id,
+                                    "threadId": req.thread_id,
+                                })
+                            if fn.get("arguments") and idx in tool_call_ids:
+                                await _publish_agui(biz, {
+                                    "type": "ToolCallArgs",
+                                    "toolCallId": tool_call_ids[idx],
+                                    "delta": fn["arguments"],
+                                })
+
+        if message_started:
+            await _publish_agui(biz, {
+                "type": "TextMessageEnd",
+                "messageId": message_id,
+                "runId": run_id,
+                "threadId": req.thread_id,
+            })
+        await _publish_agui(biz, {
+            "type": "RunFinished", "runId": run_id, "threadId": req.thread_id,
+        })
+
+    except Exception as e:
+        print(f"[/agui/chat] Error streaming from OpenClaw: {e}")
+        await _publish_agui(biz, {
+            "type": "RunError",
+            "message": str(e),
+            "runId": run_id,
+            "threadId": req.thread_id,
+        })
+
+
+@router.post("/chat", status_code=202)
+async def agui_chat(req: AgUIChatRequest):
+    """Fire-and-forget: start an OpenClaw session and stream AG-UI events to /sse/."""
+    run_id = req.run_id or str(uuid.uuid4())
+    asyncio.create_task(_run_agui_chat(req, run_id))
+    return {"status": "accepted", "run_id": run_id}
 
 
 # --- WebSocket subscribe (Redis Stream version) ---
