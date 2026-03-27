@@ -136,13 +136,13 @@ Reached either because: (a) order was auto-approved and `sessions_spawn` returne
 
 Check idempotency before spawning planning:
 ```
-exec test -f /tmp/mat_planning_{business_id}_{message_id} && echo ALREADY_SPAWNED
+exec test -f /tmp/mat_planning_{session_uuid} && echo ALREADY_SPAWNED
 ```
 If `ALREADY_SPAWNED`: output `{"outcome": "approved", "note": "planning already spawned"}` and stop immediately.
 
 Create the planning sentinel:
 ```
-exec touch /tmp/mat_planning_{business_id}_{message_id}
+exec touch /tmp/mat_planning_{session_uuid}
 ```
 
 Publish a trace event:
@@ -179,7 +179,7 @@ exec curl -s -X POST http://switch-service:6000/publish \
 
 Clean up lock files:
 ```
-exec sh -c 'rm -f /tmp/mat_lock_{session_uuid} /tmp/mat_planning_BUSINESS_ID_MESSAGE_ID'
+exec sh -c 'rm -f /tmp/mat_lock_{session_uuid} /tmp/mat_planning_{session_uuid}'
 ```
 
 Workflow complete. Do not invoke any agent or tool again.
@@ -194,13 +194,13 @@ Extract from the message: `business_id`, `message_id`, `source`, `recipients`, `
 
 Check idempotency:
 ```
-exec test -f /tmp/mat_planning_{business_id}_{message_id} && echo ALREADY_SPAWNED
+exec test -f /tmp/mat_planning_{session_uuid} && echo ALREADY_SPAWNED
 ```
 If `ALREADY_SPAWNED`: output `{"outcome": "approved", "note": "already_processed"}` and stop.
 
 Create the planning sentinel:
 ```
-exec touch /tmp/mat_planning_{business_id}_{message_id}
+exec touch /tmp/mat_planning_{session_uuid}
 ```
 
 Publish a trace event:
