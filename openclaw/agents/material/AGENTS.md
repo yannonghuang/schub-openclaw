@@ -50,15 +50,15 @@ The output IS your session UUID. Your session key is: `agent:material:subagent:{
 
 Do NOT modify the UUID. Do NOT substitute a different value. Use the output verbatim.
 
-Now check if this task has already been started (using business_id and message_id from Phase 1):
+Now check if this session has already been started (using the session UUID from above):
 ```
-exec test -f /tmp/mat_lock_{business_id}_{message_id} && echo ALREADY_RUNNING
+exec test -f /tmp/mat_lock_{session_uuid} && echo ALREADY_RUNNING
 ```
 If output is `ALREADY_RUNNING`: stop immediately. Output `{"outcome": "duplicate", "note": "already processing"}` and stop. Do not proceed with Steps 1-2.
 
 If not already running, create the lock:
 ```
-exec touch /tmp/mat_lock_{business_id}_{message_id}
+exec touch /tmp/mat_lock_{session_uuid}
 ```
 
 ### Step 1 — Material Analysis
@@ -177,9 +177,9 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Material workflow complete\", \"agent\": \"material\", \"level\": \"major\"}", "recipients": ["-2"]}'
 ```
 
-Clean up lock files so future events with the same ids can be processed:
+Clean up lock files:
 ```
-exec sh -c 'rm -f /tmp/mat_lock_BUSINESS_ID_MESSAGE_ID /tmp/mat_planning_BUSINESS_ID_MESSAGE_ID'
+exec sh -c 'rm -f /tmp/mat_lock_{session_uuid} /tmp/mat_planning_BUSINESS_ID_MESSAGE_ID'
 ```
 
 Workflow complete. Do not invoke any agent or tool again.
