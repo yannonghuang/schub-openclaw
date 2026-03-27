@@ -362,6 +362,19 @@ Index(
 )
 
 
+class EmailHitl(Base):
+    """Maps an outbound HITL email's Message-ID to the OpenClaw session that sent it."""
+    __tablename__ = "email_hitl"
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    message_id  = Column(String, unique=True, nullable=False, index=True)  # SMTP Message-ID
+    session_key = Column(String, nullable=False)   # OpenClaw session key to resume
+    agent_id    = Column(String, nullable=False, default="")
+    business_id = Column(Integer, nullable=False)
+    status      = Column(String, nullable=False, default="pending")  # pending|resumed
+    created_at  = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class AsyncJob(Base):
     """Persistent store for long-running MCP tool jobs."""
     __tablename__ = "async_jobs"

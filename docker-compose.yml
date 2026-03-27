@@ -14,8 +14,6 @@ services:
         condition: service_started
       openclaw:
         condition: service_started
-      agent-chat-ui:
-        condition: service_started
 
   db:
     image: pgvector/pgvector:pg17 #postgres:15
@@ -58,6 +56,11 @@ services:
       dockerfile: services/auth/Dockerfile
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/schub
+      - SMTP_HOST=${SMTP_HOST:-smtp.mail.me.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - SMTP_FROM=${SMTP_FROM}
 #      - NEXT_PUBLIC_FRONTEND_URL=https://192.168.0.101
     depends_on:
       - db
@@ -65,27 +68,68 @@ services:
       - "4000:4000"
 
   openclaw:
-    image: ghcr.io/openclaw/openclaw:latest
+    build:
+      context: ./openclaw
+      dockerfile: Dockerfile
     ports:
       - "18789:18789"
     volumes:
-      - ./openclaw:/root/.openclaw
+      - ./openclaw:/home/node/.openclaw
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - IMAP_HOST=${IMAP_HOST}
+      - IMAP_HOST=${IMAP_HOST:-imap.gmail.com}
       - IMAP_PORT=${IMAP_PORT:-993}
       - IMAP_USER=${IMAP_USER}
       - IMAP_PASS=${IMAP_PASS}
-      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER}
       - SMTP_PASS=${SMTP_PASS}
       - MCP_API_KEY=${MCP_API_KEY:-}
+      - BACKEND_URL=http://auth-service:4000
+      - OPENCLAW_URL=http://openclaw:18789
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     depends_on:
       - db
       - redis
       - mcp-server
       - auth-service
+
+  adaptor:
+    build:
+      context: .
+      dockerfile: services/adaptor/Dockerfile
+    environment:
+      - IMAP_HOST=${IMAP_HOST:-imap.mail.me.com}
+      - IMAP_PORT=${IMAP_PORT:-993}
+      - IMAP_USER=${IMAP_USER}
+      - IMAP_PASS=${IMAP_PASS}
+      - POLL_INTERVAL=${ADAPTOR_POLL_INTERVAL:-30}
+      - BACKEND_URL=http://auth-service:4000
+      - OPENCLAW_URL=http://openclaw:18789
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
+      - SEEN_FILE=/data/adaptor_seen.json
+    volumes:
+      - adaptor-data:/data
+    depends_on:
+      - auth-service
+      - openclaw
+    restart: unless-stopped
+
+  switch-service:
+    build:
+      context: .
+      dockerfile: services/switch/Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    ports:
+      - "6000:6000"
 
   geopol-service:
     build:
@@ -96,7 +140,6 @@ services:
       - GEOPOL_INBOUND_CHANNEL=business:-1:channel
     depends_on:
       - redis
-      - switch-service
     ports:
       - "8500:8500"
 
@@ -136,17 +179,6 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
-
-  agent-chat-ui:
-      image: localhost:5001/agent-chat-ui:latest
-      build:
-          context: ./agent-chat-ui
-          dockerfile: dockerfile
-          target: prod
-      ports:
-          - "3500:3500"
-      #volumes:
-      #    - agent-chat-ui-node-modules:/app/node_modules
       
   mcp-server:
       image: localhost:5001/mcp-server:latest
@@ -180,5 +212,10 @@ services:
 
 volumes:
   db-data:
+    external: true
+    name: schub_db-data
   redis-data:
   pgadmin-data:
+    external: true
+    name: schub_pgadmin-data
+  adaptor-data:

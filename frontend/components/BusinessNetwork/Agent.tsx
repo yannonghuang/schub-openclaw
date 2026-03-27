@@ -1,8 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo } from "react";
-import { useStream } from "@langchain/langgraph-sdk/react";
-import type { Message } from "@langchain/langgraph-sdk";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { Resizable } from "re-resizable";
 import { useEmailSocket } from "./useEmailSocket";
 
@@ -16,18 +14,15 @@ interface StepEvent {
 }
 
 /* ------------------------------------------------------------------ */
-/* Noise suppression (unchanged)                                       */
+/* Message type                                                        */
 /* ------------------------------------------------------------------ */
-const originalWarn = console.warn;
-console.warn = (...args) => {
-  if (
-    typeof args[0] === "string" &&
-    args[0].includes("New LangChain packages are available")
-  ) {
-    return;
-  }
-  originalWarn(...args);
-};
+interface ChatMessage {
+  id: string;
+  role: "user" | "assistant" | "tool";
+  content: string;
+  created_at?: string;
+  tool_calls?: Array<{ name: string; id: string }>;
+}
 
 /* ------------------------------------------------------------------ */
 /* UI helpers                                                          */
@@ -41,51 +36,36 @@ function Tool_Spinner() {
   );
 }
 
-function StepsTrace({ steps, isLoading }: { steps: StepEvent[]; isLoading: boolean }) {
-  const [expanded, setExpanded] = useState(false);
+function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowActive: boolean }) {
+  if (steps.length === 0 && !workflowActive) return null;
 
-  if (steps.length === 0) return null;
-
-  // While loading: show live expanding list
-  if (isLoading) {
-    return (
-      <div className="rounded border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-gray-600 space-y-1">
-        {steps.map((s, i) => (
+  return (
+    <div className={`rounded border px-3 py-2 text-xs space-y-1 ${workflowActive ? "border-blue-100 bg-blue-50 text-gray-600" : "border-gray-200 bg-gray-50 text-gray-500"}`}>
+      <div className="flex items-center gap-2 mb-1 font-medium">
+        {workflowActive ? (
+          <>
+            <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+            <span className="text-blue-600">Workflow running...</span>
+          </>
+        ) : (
+          <span className="text-gray-500">{steps.length} step{steps.length !== 1 ? "s" : ""} completed</span>
+        )}
+      </div>
+      {steps.map((s, i) => {
+        const isLast = i === steps.length - 1;
+        return (
           <div key={i} className="flex items-center gap-2">
-            {i === steps.length - 1 ? (
+            {workflowActive && isLast ? (
               <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
             ) : (
               <span className="text-green-500 flex-shrink-0">✓</span>
             )}
-            <span className={i === steps.length - 1 ? "text-blue-600 font-medium" : "text-gray-500"}>
-              {s.agent && s.agent !== "Main Agent" ? `[${s.agent}] ` : ""}{s.label}
+            <span className={workflowActive && isLast ? "text-blue-600 font-medium" : "text-gray-600"}>
+              {s.agent ? `[${s.agent}] ` : ""}{s.label}
             </span>
           </div>
-        ))}
-      </div>
-    );
-  }
-
-  // After loading: collapsible summary
-  return (
-    <div className="rounded border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-500">
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-1 hover:text-gray-700 w-full text-left"
-      >
-        <span>{expanded ? "▾" : "▸"}</span>
-        <span>{steps.length} step{steps.length !== 1 ? "s" : ""}</span>
-      </button>
-      {expanded && (
-        <div className="mt-1 space-y-0.5 pl-3 border-l border-gray-300">
-          {steps.map((s, i) => (
-            <div key={i} className="flex items-center gap-1.5">
-              <span className="text-green-500">✓</span>
-              <span>{s.agent && s.agent !== "Main Agent" ? `[${s.agent}] ` : ""}{s.label}</span>
-            </div>
-          ))}
-        </div>
-      )}
+        );
+      })}
     </div>
   );
 }
@@ -94,7 +74,6 @@ function normalizeContent(raw: any, isStreaming = false): string {
   if (!raw) return "";
   if (typeof raw === "object") return JSON.stringify(raw, null, 2);
   if (typeof raw === "string") {
-    // Don't attempt JSON parse while streaming — content is partial
     if (isStreaming) return raw;
     try {
       return JSON.stringify(JSON.parse(raw), null, 2);
@@ -105,26 +84,128 @@ function normalizeContent(raw: any, isStreaming = false): string {
   return String(raw);
 }
 
-async function saveMessage(thread_id: string, content: string, role: string) {
-  // Autosave to backend
-  try {
-    const resp = await fetch("/thread/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        thread_id: thread_id,
-        messages: [{ role: role, content: content }], //[msg],
-      }),
-    });
-    const data = await resp.json();
-    console.info(`Saved message: ${JSON.stringify(data)}`);
-  } catch (err) {
-    console.error("Failed to save message:", err);
-  }
+/* ------------------------------------------------------------------ */
+/* OpenClaw SSE streaming hook                                         */
+/* ------------------------------------------------------------------ */
+function useOpenClawStream(sessionKey: string | null) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const submit = useCallback(async (userContent: string) => {
+    if (!sessionKey) return;
+
+    const userMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: userContent,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setIsLoading(true);
+
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    const assistantId = crypto.randomUUID();
+
+    try {
+      const resp = await fetch("/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-openclaw-session-key": sessionKey,
+        },
+        body: JSON.stringify({
+          model: "openclaw:main",
+          messages: [{ role: "user", content: userContent }],
+          stream: true,
+        }),
+        signal: ctrl.signal,
+      });
+
+      if (!resp.ok || !resp.body) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+
+      let assistantContent = "";
+      const toolCalls: Array<{ name: string; id: string }> = [];
+
+      // Add assistant placeholder
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: assistantId,
+          role: "assistant",
+          content: "",
+          created_at: new Date().toISOString(),
+          tool_calls: [],
+        },
+      ]);
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6).trim();
+          if (data === "[DONE]") continue;
+
+          try {
+            const chunk = JSON.parse(data);
+            const delta = chunk.choices?.[0]?.delta;
+            if (!delta) continue;
+
+            if (delta.content) {
+              assistantContent += delta.content;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, content: assistantContent } : m
+                )
+              );
+            }
+
+            if (delta.tool_calls) {
+              for (const tc of delta.tool_calls) {
+                if (tc.function?.name) {
+                  toolCalls.push({ name: tc.function.name, id: tc.id ?? "" });
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantId
+                        ? { ...m, tool_calls: [...toolCalls] }
+                        : m
+                    )
+                  );
+                }
+              }
+            }
+          } catch {
+            /* ignore partial chunk parse errors */
+          }
+        }
+      }
+    } catch (err: any) {
+      if (err.name !== "AbortError") {
+        console.error("[OpenClaw] Stream error:", err);
+        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [sessionKey]);
+
+  return { messages, setMessages, isLoading, submit };
 }
-
-
-
 
 /* ------------------------------------------------------------------ */
 /* Agent                                                               */
@@ -143,74 +224,17 @@ export default function Agent({
   const [resolvedThreadId, setResolvedThreadId] = useState<string | null>(null);
   const [loadingInit, setLoadingInit] = useState(true);
   const hasSentInitial = useRef(false);
-  const [isInterrupted, setIsInterrupted] = useState(false);
-  const [interruptInfo, setInterruptInfo] = useState<any>(null);
-  const resumedInterruptIds = useRef<Set<string>>(new Set());
-
-  const [restoredMessages, setRestoredMessages] = useState<Message[]>([]);
+  const [restoredMessages, setRestoredMessages] = useState<ChatMessage[]>([]);
   const savedMessageIds = useRef<Set<string>>(new Set());
 
-  const doSubmit = async (content: string, extraPayload={}) => {
+  const { messages, setMessages, isLoading, submit } = useOpenClawStream(resolvedThreadId);
+  const [traceSteps, setTraceSteps] = useState<StepEvent[]>([]);
+  const [workflowActive, setWorkflowActive] = useState(false);
+  const workflowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    submit(
-      {
-        business_id: businessId,
-        messages: [
-          {
-            type: "human",
-            content: JSON.stringify({
-              payload: {
-                ...extraPayload,
-                business_id: businessId,
-                messages: [{ type: "human", content }],
-              },
-            }),
-          },
-        ],
-      },
-      { streamMode: ["messages", "values"], streamSubgraphs: true },
-    );
-
-    //await saveMessage(resolvedThreadId, content, "human")
-  }
-
-  const displayAndSave = (save: boolean = false): any[] => {
-    const out: any[] = [];
-
-    for (const m of messages) {
-      if (!m.id || savedMessageIds.current.has(m.id)) {
-        if (m.id) out.push(m);
-        continue;
-      }
-
-      if (save) {
-        savedMessageIds.current.add(m.id);
-        fetch("/thread/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            thread_id: resolvedThreadId,
-            messages: [
-              {
-                role: m.type,
-                content: m.content,
-                message_id: m.id,
-                created_at: (m as any).created_at,
-              },
-            ],
-          }),
-        }).catch(err => console.error("Failed to save message:", err));
-      }
-
-      out.push(m);
-    }
-
-    return out;
-  };
   /* ------------------------------------------------------------------ */
-  /* 1) Resolve external thread → langgraph thread id                   */
+  /* 1) Resolve external thread → OpenClaw session key                  */
   /* ------------------------------------------------------------------ */
-
   useEffect(() => {
     if (!externalThreadId) {
       setLoadingInit(false);
@@ -226,7 +250,7 @@ export default function Agent({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             external_thread_id: externalThreadId,
-            assistant_id: "dispatcher_agent",
+            assistant_id: "main",
             business_id: businessId,
           }),
         });
@@ -234,8 +258,14 @@ export default function Agent({
         const data = await resp.json();
         if (!cancelled) {
           setResolvedThreadId(data.langgraph_thread_id);
-          // Existing messages from backend
-          setRestoredMessages(data.messages ?? []);
+          setRestoredMessages(
+            (data.messages ?? []).map((m: any) => ({
+              id: m.id ?? crypto.randomUUID(),
+              role: m.role ?? m.type ?? "assistant",
+              content: m.content ?? "",
+              created_at: m.created_at,
+            }))
+          );
         }
       } catch (err) {
         console.error("Failed to resolve thread:", err);
@@ -250,168 +280,123 @@ export default function Agent({
   }, [externalThreadId, businessId]);
 
   /* ------------------------------------------------------------------ */
-  /* 2) LangGraph stream (single source of truth)                        */
+  /* 2) Auto-save new messages to backend                               */
   /* ------------------------------------------------------------------ */
-  const {
-    messages,
-    submit,
-    isLoading,
-    values,
-    interrupt,
-  } = useStream<{
-    messages: Message[];
-    business_id: number;
-    waiting_for_email: boolean;
-    interrupt_reason: string
-  }>({
-    apiUrl,
-    assistantId: "dispatcher_agent",
-    threadId: resolvedThreadId ?? undefined,
-    messagesKey: "messages",
-    onThreadId: (uuid) => {
-      if (!resolvedThreadId) setResolvedThreadId(uuid);
-    },
-    reconnectOnMount: true,
-    // no-op: forces "updates" into streamMode so server sends per-node state diffs,
-    // which the SDK accumulates into `values` — enabling the step trace below.
-    onUpdateEvent: (_data: any, _options: any) => {},
-  });
-
   useEffect(() => {
-    if (!resolvedThreadId) return;
-    if (!messages?.length) return;
-    if (isLoading) return;
-    displayAndSave(true);
+    if (!resolvedThreadId || !messages.length || isLoading) return;
+
+    for (const m of messages) {
+      if (savedMessageIds.current.has(m.id)) continue;
+      savedMessageIds.current.add(m.id);
+
+      fetch("/thread/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          thread_id: resolvedThreadId,
+          messages: [
+            {
+              role: m.role,
+              content: m.content,
+              message_id: m.id,
+              created_at: m.created_at,
+            },
+          ],
+        }),
+      }).catch((err) => console.error("Failed to save message:", err));
+    }
   }, [messages, resolvedThreadId, isLoading]);
 
-  // Derive step trace directly from messages in render — no state, no batching delay.
-  // messages updates per-token, so steps appear in real-time as each tool call / result lands.
+  /* ------------------------------------------------------------------ */
+  /* 3) Derive step trace from assistant tool calls                     */
+  /* ------------------------------------------------------------------ */
   const steps = useMemo<StepEvent[]>(() => {
     const result: StepEvent[] = [];
-    for (const msg of (messages as any[])) {
-      if ((msg.type === "ai" || msg.role === "assistant") && msg.tool_calls?.length) {
-        for (const tc of msg.tool_calls) {
+    for (const m of messages) {
+      if (m.role === "assistant" && m.tool_calls?.length) {
+        for (const tc of m.tool_calls) {
           result.push({ label: `Calling: ${tc.name}`, ts: 0 });
         }
-      } else if (msg.type === "tool" || msg.role === "tool") {
-        if (msg.name) result.push({ label: `Tool: ${msg.name}`, ts: 0 });
-      } else if (msg.type === "ai" || msg.role === "assistant") {
-        try {
-          const parsed = JSON.parse(typeof msg.content === "string" ? msg.content : "{}");
-          if (parsed.route) result.push({ label: `Routing to: ${parsed.route}`, ts: 0 });
-        } catch { /* streaming partial or plain text */ }
       }
     }
     return result;
   }, [messages]);
 
-
-  useEffect(() => {
-    if (!interrupt || !interrupt.id) return;
-
-    console.log("INTERRUPT RECEIVED:", interrupt);
-
-    if (interrupt) {
-      if (!resumedInterruptIds.current.has(interrupt.id)) {
-        resumedInterruptIds.current.add(interrupt.id);
-
-        setInterruptInfo(interrupt.value);
-        setIsInterrupted(true);
-      }
-    }
-  }, [interrupt]);
-
+  /* ------------------------------------------------------------------ */
+  /* 4) Switch-service socket — async job completions                   */
+  /* ------------------------------------------------------------------ */
   useEmailSocket(
     businessId,
     resolvedThreadId,
     async (payload) => {
-      if (!submit) return;
-
-      console.log("[Agent] Email received → submitting to stream");
-
-      setIsInterrupted(false);
-
-      try { // restore historic messages
-        const resp = await fetch(`/thread/messages/${resolvedThreadId}`);
-        const data = await resp.json();
-
-        // Existing messages from backend
-        setRestoredMessages(data.messages ?? []);
-      } catch (err) {
-        console.error("Failed to restore messages:", err);
-      }
-
-      await submit(undefined, {
-        command: {
-          resume: {
-            approved: payload.approved ?? true,
-            raw_email: payload.message.content,
-          },
-        },
-        streamMode: ["messages", "values"],
-        streamSubgraphs: true,
-      });
+      // email_received via switch: send as a new message to the session
+      if (!resolvedThreadId) return;
+      console.log("[Agent] Email received via switch → forwarding to OpenClaw");
+      await submit(
+        JSON.stringify({
+          type: "email_received",
+          approved: payload.approved ?? true,
+          raw_email: payload.message?.content ?? payload.content,
+        })
+      );
     },
     async (payload) => {
-      if (!submit) return;
-
-      console.log("[Agent] async_tool_complete → resuming thread", payload);
-
-      setIsInterrupted(false);
-
-      await submit(undefined, {
-        command: {
-          resume: {
-            job_result: payload.job_result,
-            job_id: payload.job_id,
-          },
-        },
-        streamMode: ["messages", "values"],
-        streamSubgraphs: true,
-      });
+      if (!resolvedThreadId) return;
+      console.log("[Agent] async_tool_complete → forwarding to OpenClaw", payload);
+      await submit(
+        JSON.stringify({
+          type: "async_tool_complete",
+          job_id: payload.job_id,
+          job_result: payload.job_result,
+        })
+      );
+    },
+    (payload) => {
+      setTraceSteps((prev) => [
+        ...prev,
+        { label: payload.step ?? payload.message ?? "(trace)", agent: payload.agent, ts: Date.now() },
+      ]);
+      setWorkflowActive(true);
+      if (workflowTimerRef.current) clearTimeout(workflowTimerRef.current);
+      workflowTimerRef.current = setTimeout(() => setWorkflowActive(false), 30_000);
     }
   );
 
-
   /* ------------------------------------------------------------------ */
-  /* 3) Send initial message ONCE                                        */
+  /* 5) Send initial message once                                       */
   /* ------------------------------------------------------------------ */
   useEffect(() => {
-    if (!submit) return;
     if (!resolvedThreadId) return;
     if (hasSentInitial.current) return;
-
     hasSentInitial.current = true;
 
     (async () => {
-      await doSubmit(initialMessage);
+      setTraceSteps([]);
+      setWorkflowActive(false);
+      if (workflowTimerRef.current) clearTimeout(workflowTimerRef.current);
+      await submit(initialMessage);
     })();
-
-  }, [submit, resolvedThreadId, businessId, initialMessage]);
+  }, [resolvedThreadId, businessId, initialMessage]);
 
   /* ------------------------------------------------------------------ */
-  /* 4) User input                                                      */
+  /* 6) User input                                                      */
   /* ------------------------------------------------------------------ */
   const [userInput, setUserInput] = useState("");
 
   const sendMessage = async () => {
-    if (!userInput.trim()) return;
-    if (!submit || !resolvedThreadId) return;
-    if (isInterrupted) return;
-
-    await doSubmit(userInput);
+    if (!userInput.trim() || !resolvedThreadId || isLoading) return;
+    const text = userInput;
     setUserInput("");
+    setTraceSteps([]);
+    setWorkflowActive(false);
+    if (workflowTimerRef.current) clearTimeout(workflowTimerRef.current);
+    await submit(text);
   };
 
   /* ------------------------------------------------------------------ */
-  /* 5) Render                                                          */
+  /* 7) Render                                                          */
   /* ------------------------------------------------------------------ */
-
-  const displayMessages = useMemo(() => {
-    return displayAndSave();
-  }, [messages]);
-
-  const allMessages = [...restoredMessages, ...displayMessages];
+  const allMessages = [...restoredMessages, ...messages];
 
   if (loadingInit) {
     return (
@@ -434,14 +419,15 @@ export default function Agent({
         <div className="p-2 h-full overflow-y-auto space-y-3 bg-gray-50">
           {allMessages.map((m, idx) => {
             const isLastMsg = idx === allMessages.length - 1;
-            const isStreamingThis = isLoading && isLastMsg && (m.type === "ai" || (m as any).role === "assistant");
+            const isStreamingThis =
+              isLoading && isLastMsg && m.role === "assistant";
             return (
               <div
-                key={`${m.type}-${idx}`}
+                key={`${m.role}-${idx}`}
                 className="p-2 rounded border bg-white shadow-sm"
               >
                 <div className="font-semibold capitalize mb-1 text-blue-600">
-                  {`${(m.type || (m as any).role)}: ${((m as any).created_at || "")}`}
+                  {`${m.role}: ${m.created_at ?? ""}`}
                 </div>
                 <pre className="whitespace-pre-wrap text-sm overflow-x-auto bg-gray-100 p-2 rounded">
                   {normalizeContent(m.content, isStreamingThis)}
@@ -450,15 +436,15 @@ export default function Agent({
             );
           })}
 
-          {!isInterrupted && isLoading && steps.length === 0 && <Tool_Spinner />}
+          {isLoading && traceSteps.length === 0 && steps.length === 0 && <Tool_Spinner />}
         </div>
       </Resizable>
 
-      <StepsTrace steps={steps} isLoading={isLoading && !isInterrupted} />
+      <StepsTrace steps={traceSteps.length > 0 ? traceSteps : steps} workflowActive={workflowActive || isLoading} />
 
       <div className="flex gap-2 mt-2">
         <input
-          disabled={isInterrupted}
+          disabled={isLoading}
           className="flex-1 border rounded px-2 py-1"
           value={userInput}
           onChange={(e) => setUserInput(e.target.value)}
@@ -466,21 +452,13 @@ export default function Agent({
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
         />
         <button
-          disabled={isInterrupted}
+          disabled={isLoading}
           className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 disabled:opacity-50"
           onClick={sendMessage}
         >
           Send
         </button>
       </div>
-
-      {isInterrupted && (
-        <div className="p-3 rounded bg-yellow-100 border text-sm">
-          {interruptInfo?.interrupt_reason === "async_tool"
-            ? `⚙️ Running ${interruptInfo.tool_name ?? "background job"}… waiting for result`
-            : "⏳ Waiting for email reply…"}
-        </div>
-      )}
     </div>
   );
 }

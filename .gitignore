@@ -1,11 +1,32 @@
 **/__pycache__/
 .claude/
+.DS_Store
 
 .next/
 bom-rewrite-solve/data/*
 data/*
 bom-rewrite-solve/_data/*
 
-# IMAP adaptor runtime state
-services/adaptor/app/.imap_state.json
 .env
+
+# OpenClaw runtime state (auto-generated, not part of source)
+openclaw/agents/*/sessions/
+openclaw/agents/*/.openclaw/
+openclaw/agents/*/agent/
+openclaw/agents/*/config/
+openclaw/agents/*/BOOTSTRAP.md
+openclaw/agents/*/HEARTBEAT.md
+openclaw/agents/*/IDENTITY.md
+openclaw/agents/*/SOUL.md
+openclaw/agents/*/TOOLS.md
+openclaw/agents/*/USER.md
+openclaw/canvas/
+openclaw/credentials/
+openclaw/devices/
+openclaw/identity/
+openclaw/logs/
+openclaw/subagents/
+openclaw/telegram/
+openclaw/update-check.json
+openclaw/openclaw.json.bak*
+openclaw/openclaw.json

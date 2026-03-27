@@ -55,7 +55,19 @@ export default function MessagePanel({
 
     if (triggerAgentRef.current) {
       setSenders((prev) => ({ ...prev, [data.from]: true }));
-      setAgentMessage(data.text);
+      let agentMsg = data.text;
+      if (businessId) {
+        try {
+          const parsed = JSON.parse(data.text);
+          if (typeof parsed === "object" && parsed !== null && !parsed.business_id) {
+            parsed.business_id = businessId;
+          }
+          agentMsg = JSON.stringify(parsed);
+        } catch {
+          // not JSON — pass through as-is
+        }
+      }
+      setAgentMessage(agentMsg);
       setShowAgentPopup(true);
     }
   });

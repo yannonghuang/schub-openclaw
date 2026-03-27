@@ -29,8 +29,6 @@ def create_business(business: schemas.BusinessCreate, db: Session = Depends(get_
 @router.get("/", response_model=List[schemas.BusinessOut])
 def get_businesses(db: Session = Depends(get_session)):
     businesses = db.query(models.Business).all()
-    if not businesses:
-        raise HTTPException(404, "Business not found")
     return businesses
 
 @router.get("/{business_id}", response_model=schemas.BusinessOut)
