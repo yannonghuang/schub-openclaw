@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { Resizable } from "re-resizable";
-import { useEmailSocket } from "./useEmailSocket";
+import { useAGUIStream } from "../../hooks/useAGUIStream";
+import type { TraceEvent, ToolCallEndEvent, HITLReplyEvent } from "../../types/agui-events";
 
 /* ------------------------------------------------------------------ */
 /* Step event types                                                    */
@@ -340,42 +341,49 @@ export default function Agent({
   }, [messages]);
 
   /* ------------------------------------------------------------------ */
-  /* 4) Switch-service socket — async job completions                   */
+  /* 4) AG-UI SSE stream — async job completions + trace events         */
   /* ------------------------------------------------------------------ */
-  useEmailSocket(
+  useAGUIStream(
     businessId,
     resolvedThreadId,
-    async (payload) => {
-      // email_received via switch: send as a new message to the session
-      if (!resolvedThreadId) return;
-      console.log("[Agent] Email received via switch → forwarding to OpenClaw");
-      await submit(
-        JSON.stringify({
-          type: "email_received",
-          approved: payload.approved ?? true,
-          raw_email: payload.message?.content ?? payload.content,
-        })
-      );
-    },
-    async (payload) => {
-      if (!resolvedThreadId) return;
-      console.log("[Agent] async_tool_complete → forwarding to OpenClaw", payload);
-      await submit(
-        JSON.stringify({
-          type: "async_tool_complete",
-          job_id: payload.job_id,
-          job_result: payload.job_result,
-        })
-      );
-    },
-    (payload) => {
+    // onTraceEvent
+    (event: TraceEvent) => {
       setTraceSteps((prev) => [
         ...prev,
-        { label: payload.step ?? payload.message ?? "(trace)", agent: payload.agent, ts: Date.now(), level: payload.level },
+        {
+          label: event.value.step,
+          agent: event.value.agent,
+          ts: event.timestamp ?? Date.now(),
+          level: event.value.level,
+        },
       ]);
       setWorkflowActive(true);
       if (workflowTimerRef.current) clearTimeout(workflowTimerRef.current);
       workflowTimerRef.current = setTimeout(() => setWorkflowActive(false), 30_000);
+    },
+    // onToolCallEnd
+    async (event: ToolCallEndEvent) => {
+      if (!resolvedThreadId) return;
+      console.log("[Agent] ToolCallEnd → forwarding to OpenClaw", event);
+      await submit(
+        JSON.stringify({
+          type: "async_tool_complete",
+          job_id: event.toolCallId,
+          job_result: event.output,
+        })
+      );
+    },
+    // onHITLReply
+    async (event: HITLReplyEvent) => {
+      if (!resolvedThreadId) return;
+      console.log("[Agent] HITLReply → forwarding to OpenClaw");
+      await submit(
+        JSON.stringify({
+          type: "email_received",
+          approved: event.value.approved,
+          raw_email: event.value.messageContent,
+        })
+      );
     }
   );
 

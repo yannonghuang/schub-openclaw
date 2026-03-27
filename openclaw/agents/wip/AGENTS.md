@@ -31,12 +31,12 @@ Publish trace events before calling the engine:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"MES analysis started\", \"agent\": \"wip\", \"level\": \"major\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"MES analysis started\", \"agent\": \"wip\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Running MES impact analysis...\", \"agent\": \"wip\", \"level\": \"detail\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Running MES impact analysis...\", \"agent\": \"wip\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Call `mes_engine` once with a `payload` wrapper:
@@ -66,7 +66,7 @@ Publish a trace event with the impact:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"MES analysis complete — impact: IMPACT\", \"agent\": \"wip\", \"level\": \"major\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"MES analysis complete — impact: IMPACT\", \"agent\": \"wip\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 Replace IMPACT with the actual impact value.
 
@@ -76,12 +76,12 @@ Inspect the `impact` field:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Composing WIP approval request...\", \"agent\": \"wip\", \"level\": \"detail\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Composing WIP approval request...\", \"agent\": \"wip\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Approval email sent — awaiting human confirmation...\", \"agent\": \"wip\", \"level\": \"waiting\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Approval email sent — awaiting human confirmation...\", \"agent\": \"wip\", \"level\": \"waiting\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 - Do not send the same email more than once.
 
@@ -91,12 +91,12 @@ Publish trace events before and after notification:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"WIP approved — sending notification\", \"agent\": \"wip\", \"level\": \"major\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"WIP approved — sending notification\", \"agent\": \"wip\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Sending WIP result notification...\", \"agent\": \"wip\", \"level\": \"detail\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Sending WIP result notification...\", \"agent\": \"wip\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Send a notification email to the source business using the `send_email` skill (or exec curl if unavailable):
@@ -110,7 +110,7 @@ Publish a final trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"WIP workflow complete\", \"agent\": \"wip\", \"level\": \"major\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"WIP workflow complete\", \"agent\": \"wip\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Then terminate.

@@ -45,7 +45,7 @@ Publish a trace event before submitting the job:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order engine started\", \"agent\": \"order\", \"level\": \"major\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Order engine started\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Before submitting the job, persist the full task context (including `_material_session_key`) to a temp file so the callback session can recover it:
@@ -79,12 +79,12 @@ The engine returns `{"status": "pending", "job_id": "..."}` immediately. After r
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Submitting order job to analysis engine...\", \"agent\": \"order\", \"level\": \"detail\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Submitting order job to analysis engine...\", \"agent\": \"order\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order job queued — waiting for result...\", \"agent\": \"order\", \"level\": \"waiting\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Order job queued — waiting for result...\", \"agent\": \"order\", \"level\": \"waiting\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 **Do not poll.** End your turn here — state the job_id you are waiting on. The engine will resume this session automatically when the job completes.
@@ -97,7 +97,7 @@ Publish a trace event with the impact:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order engine complete — impact: IMPACT\", \"agent\": \"order\", \"level\": \"major\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Order engine complete — impact: IMPACT\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 Replace IMPACT with the actual impact value from the result.
 
@@ -107,12 +107,12 @@ Inspect the `impact` field:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Composing approval request email...\", \"agent\": \"order\", \"level\": \"detail\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Composing approval request email...\", \"agent\": \"order\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Approval email sent — awaiting human confirmation...\", \"agent\": \"order\", \"level\": \"waiting\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Approval email sent — awaiting human confirmation...\", \"agent\": \"order\", \"level\": \"waiting\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 - Do not send the same email more than once.
 
@@ -132,14 +132,14 @@ Publish a trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order approved — sending notification\", \"agent\": \"order\", \"level\": \"major\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Order approved — sending notification\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Publish a detail trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Sending result notification to source business...\", \"agent\": \"order\", \"level\": \"detail\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Sending result notification to source business...\", \"agent\": \"order\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Send a notification email back to the source business:
@@ -153,7 +153,7 @@ If `_material_session_key` is present in the original task, publish a trace even
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Returning control to material workflow...\", \"agent\": \"order\", \"level\": \"detail\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Returning control to material workflow...\", \"agent\": \"order\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 ```
 exec curl -s -X POST http://openclaw:18789/v1/chat/completions \
@@ -171,7 +171,7 @@ Publish a final trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order workflow complete\", \"agent\": \"order\", \"level\": \"major\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Order workflow complete\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Return this exact JSON as your final response (replacing placeholders with actual values):

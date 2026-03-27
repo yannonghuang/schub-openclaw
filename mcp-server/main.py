@@ -83,17 +83,19 @@ _all_sub_apps = [
 # Lifespan: start all session managers
 # ---------------------------
 async def _notify_complete(job_id: str, update: dict) -> None:
-    """Publish async_tool_complete to switch-service after a job finishes."""
+    """Publish ToolCallEnd (AG-UI) to switch-service after a job finishes."""
     async with httpx.AsyncClient(timeout=5) as c:
         resp = await c.get(f"{BACKEND_URL}/async-jobs/{job_id}")
         job = resp.json() if resp.is_success else {}
+    import time as _time
     payload = {
-        "type": "async_tool_complete",
-        "thread_id": job.get("thread_id", ""),
-        "job_id": job_id,
-        "job_result": update.get("result"),
+        "type": "ToolCallEnd",
+        "toolCallId": job_id,
+        "threadId": job.get("thread_id", ""),
+        "output": update.get("result"),
         "error": update.get("error"),
-        "idempotency_key": f"job:{job_id}",
+        "idempotencyKey": f"job:{job_id}",
+        "timestamp": int(_time.time() * 1000),
     }
     async with httpx.AsyncClient(timeout=5) as c:
         await c.post(SWITCH_URL, json={
