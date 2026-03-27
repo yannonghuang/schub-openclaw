@@ -45,7 +45,7 @@ Publish a trace event before submitting the job:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order engine started\", \"agent\": \"order\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order engine started\", \"agent\": \"order\", \"level\": \"major\"}", "recipients": ["-2"]}'
 ```
 
 Before submitting the job, persist the full task context (including `_material_session_key`) to a temp file so the callback session can recover it:
@@ -75,7 +75,19 @@ Always forward `quantity_decrease_percentage` and `delivery_delay_days` — do n
 
 If `order_engine` is unavailable, report it and stop.
 
-The engine returns `{"status": "pending", "job_id": "..."}` immediately. **Do not poll.** End your turn here — state the job_id you are waiting on. The engine will resume this session automatically when the job completes.
+The engine returns `{"status": "pending", "job_id": "..."}` immediately. After receiving the job_id, publish two more trace events:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Submitting order job to analysis engine...\", \"agent\": \"order\", \"level\": \"detail\"}", "recipients": ["-2"]}'
+```
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order job queued — waiting for result...\", \"agent\": \"order\", \"level\": \"waiting\"}", "recipients": ["-2"]}'
+```
+
+**Do not poll.** End your turn here — state the job_id you are waiting on. The engine will resume this session automatically when the job completes.
 
 ### Step 2 — Handle job result (on resume)
 
@@ -85,13 +97,23 @@ Publish a trace event with the impact:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order engine complete — impact: IMPACT\", \"agent\": \"order\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order engine complete — impact: IMPACT\", \"agent\": \"order\", \"level\": \"major\"}", "recipients": ["-2"]}'
 ```
 Replace IMPACT with the actual impact value from the result.
 
 Inspect the `impact` field:
 - If `impact = "low"`: automatically approved — proceed to Step 3.
-- If `impact = "high"` (or missing or unrecognised): publish a trace event `"Awaiting human approval via email"`, send a confirmation request email using the `send_email` skill, then end your turn returning exactly: `{"outcome": "pending_approval", "session_key": "YOUR_SESSION_KEY"}`. Do NOT proceed to Step 3 or 4.
+- If `impact = "high"` (or missing or unrecognised): publish these trace events in order, then send a confirmation request email using the `send_email` skill, then end your turn returning exactly: `{"outcome": "pending_approval", "session_key": "YOUR_SESSION_KEY"}`. Do NOT proceed to Step 3 or 4.
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Composing approval request email...\", \"agent\": \"order\", \"level\": \"detail\"}", "recipients": ["-2"]}'
+```
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Approval email sent — awaiting human confirmation...\", \"agent\": \"order\", \"level\": \"waiting\"}", "recipients": ["-2"]}'
+```
 - Do not send the same email more than once.
 
 ### Step 3 — Handle approval (on resume or auto-approve)
@@ -110,7 +132,14 @@ Publish a trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order approved — sending notification\", \"agent\": \"order\"}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order approved — sending notification\", \"agent\": \"order\", \"level\": \"major\"}", "recipients": ["-2"]}'
+```
+
+Publish a detail trace event:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Sending result notification to source business...\", \"agent\": \"order\", \"level\": \"detail\"}", "recipients": ["-2"]}'
 ```
 
 Send a notification email back to the source business:
@@ -120,7 +149,12 @@ exec curl -s -X POST http://auth-service:4000/send-email \
   -d '{"business_id": BUSINESS_ID, "recipients": [SOURCE_BUSINESS_ID], "subject": "Order Analysis Result", "body": "Order analysis complete. Outcome: approved. Materials: MATERIALS."}'
 ```
 
-If `_material_session_key` is present in the original task, call back the material session so it can continue its workflow (spawn Planning Agent). Include the **full original event context** so the material session has everything needed to spawn planning:
+If `_material_session_key` is present in the original task, publish a trace event then call back the material session so it can continue its workflow (spawn Planning Agent). Include the **full original event context** so the material session has everything needed to spawn planning:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Returning control to material workflow...\", \"agent\": \"order\", \"level\": \"detail\"}", "recipients": ["-2"]}'
+```
 ```
 exec curl -s -X POST http://openclaw:18789/v1/chat/completions \
   -H "Authorization: Bearer ${OPENCLAW_TOKEN}" \
@@ -132,6 +166,13 @@ exec curl -s -X POST http://openclaw:18789/v1/chat/completions \
 Replace all placeholders with actual values from the original task: MATERIAL_SESSION_KEY (from `_material_session_key`), BUSINESS_ID, MESSAGE_ID, SOURCE_ID, RECIPIENTS_JSON (e.g. `[1,101,103]`), MATERIALS_JSON (e.g. `["Steel Rod"]`), QTY_PCT, DELAY_DAYS.
 
 ### Step 4 — Report and terminate
+
+Publish a final trace event:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"trace_event\", \"business_id\": BUSINESS_ID, \"step\": \"Order workflow complete\", \"agent\": \"order\", \"level\": \"major\"}", "recipients": ["-2"]}'
+```
 
 Return this exact JSON as your final response (replacing placeholders with actual values):
 ```json
