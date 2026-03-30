@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useAuth } from "../context/AuthContext";
+import { useAgentPanel } from "../context/AgentPanelContext";
 import { useState } from "react";
 
 export default function NavBar() {
   const router = useRouter();
   const { user, signOut, isSystem } = useAuth();
+  const { setShowWindow } = useAgentPanel();
   const [open, setOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
@@ -73,6 +75,15 @@ export default function NavBar() {
                 }`}
               >
                 
+                {!isSystem() && (
+                  <button
+                    onClick={() => setShowWindow(true)}
+                    className="block w-full text-left px-4 py-2 text-gray-800 hover:bg-gray-100"
+                  >
+                    Chat
+                  </button>
+                )}
+
                 {!isSystem() && (
                   <Link
                     href="/agent"

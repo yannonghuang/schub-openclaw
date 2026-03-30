@@ -298,6 +298,7 @@ class ThreadResponse(BaseModel):
     thread_id: str
     title: Optional[str]
     initial_message: Optional[str]
+    thread_source: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -313,6 +314,8 @@ class ResolveRequest(BaseModel):
     assistant_id: str
     business_id: int
     initial_message: str | None = None
+    thread_source: str | None = "pubsub"
+    title: str | None = None
 
 # -------------------------------
 # Request Models

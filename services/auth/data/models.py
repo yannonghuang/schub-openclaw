@@ -191,6 +191,9 @@ class Thread(Base):
     # The human message responsible for opening the window
     initial_message: Mapped[str] = mapped_column(Text, nullable=True)
 
+    # "pubsub" (triggered by external event) or "user" (initiated by logged-in user)
+    thread_source: Mapped[str] = mapped_column(String, nullable=True)
+
     created_at: Mapped[str] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
