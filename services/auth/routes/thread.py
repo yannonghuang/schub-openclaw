@@ -83,6 +83,9 @@ def resolve_thread(req: ResolveRequest, db: Session = Depends(get_session)):
         thread_id=new_uuid,
         external_thread_id=req.external_thread_id,
         business_id=req.business_id,
+        thread_source=req.thread_source or "pubsub",
+        title=req.title,
+        initial_message=req.initial_message,
     )
 
     try:
@@ -201,6 +204,7 @@ def list_threads(business_id: int, db: Session = Depends(get_session)):
             "langgraph_thread_id": t.thread_id,
             "title": t.title,
             "message_count": len(t.messages),
+            "thread_source": t.thread_source,
             "created_at": t.created_at,
             "updated_at": t.updated_at,
         }

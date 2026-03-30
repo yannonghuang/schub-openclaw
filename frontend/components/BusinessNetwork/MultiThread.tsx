@@ -1,191 +1,228 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Card, CardContent } from "../ui/card";
+import { useState } from "react";
 import Agent from "./Agent";
-import { Rnd } from "react-rnd";
+import { useAgentPanel } from "../../context/AgentPanelContext";
+import { useThreadHistory } from "../../hooks/useThreadHistory";
+import { useAuth } from "../../context/AuthContext";
 
-export type AgentThread = {
-  threadKey: string;    
-  id: string;           
-  title: string;
-  initialMessage: string;
-  businessId: number | null;
-  type?: string;
-  eventId?: string;
-};
+const QUICK_ACTIONS = [
+  "What is the status of my open orders?",
+  "Check material supply levels",
+  "Plan production for next week",
+  "WIP queue status",
+];
 
-export default function MultiThread({
-  businessId,
-  initialMessage,
-  setShowAgentPopup
-}: {
-  businessId: number | null;
-  initialMessage?: string | null;
-  setShowAgentPopup?: (fn: boolean) => void | null;
-}) {
-  const [threads, setThreads] = useState<AgentThread[]>([]);
-  const [activeKey, setActiveKey] = useState<string | null>(null);
-  const [showWindow, setShowWindow] = useState(true);
+export default function MultiThread() {
+  const {
+    threads, activeKey, showWindow,
+    setActiveKey, setShowWindow,
+    openUserThread, reopenThread, closeThread,
+  } = useAgentPanel();
 
-  // window position + size
-  const [size, setSize] = useState({ width: 600, height: 500 });
-  const [position, setPosition] = useState({ x: 50, y: 50 });
+  const { user } = useAuth();
+  const businessId = user?.business?.id ?? null;
 
-  // ----------------- Helpers -----------------
-  const parseTypeAndId = (msg: string): { type?: string; id?: string } => {
-    try {
-      const data = JSON.parse(msg);
-      if (data && typeof data === "object") {
-        return { type: data.type, id: data.message_id };
-      }
-    } catch {}
-    return {};
+  const [showNewChat, setShowNewChat] = useState(false);
+  const [newChatInput, setNewChatInput] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
+  const { threads: history, loading: histLoading, reload: reloadHistory } = useThreadHistory(businessId);
+
+  const startNewChat = () => {
+    if (!newChatInput.trim()) return;
+    openUserThread(newChatInput.trim());
+    setNewChatInput("");
+    setShowNewChat(false);
+    setShowHistory(false);
   };
 
-  const openThread = (msg: string) => {
-    const { type, id } = parseTypeAndId(msg);
-
-    if (!type || !id) return; // invalid noise message
-
-    const newKey = type && id ? `${type}:${id}` : crypto.randomUUID();
-
-    setThreads(prev => {
-      const existing = prev.find(t => t.threadKey === newKey);
-      if (existing) {
-        setActiveKey(existing.threadKey);
-        return prev;
-      }
-
-      const newThread: AgentThread = {
-        threadKey: newKey,
-        id: crypto.randomUUID(),
-        title: type && id ? `${type} #${id}` : `Thread ${prev.length + 1}`,
-        initialMessage: msg,
-        businessId,
-        type,
-        eventId: id,
-      };
-
-      setActiveKey(newKey);
-      return [...prev, newThread];
+  const handleReopenThread = (t: typeof history[0]) => {
+    reopenThread({
+      external_thread_id: t.external_thread_id,
+      title: t.title,
+      thread_source: t.thread_source,
     });
-
-    setShowWindow(true); // open if closed
+    setShowHistory(false);
   };
 
-  const closeThread = (threadKey: string) => {
-    setThreads(prev => {
-      const remaining = prev.filter(t => t.threadKey !== threadKey);
-      if (activeKey === threadKey) {
-        setActiveKey(remaining.length ? remaining[0].threadKey : null);
-      }
-      return remaining;
-    });
+  const handleOpenHistory = () => {
+    reloadHistory();
+    setShowHistory(true);
+    setShowNewChat(false);
   };
 
-  useEffect(() => {
-    if (initialMessage) openThread(initialMessage);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMessage]);
-
-  const activeThread = threads.find(t => t.threadKey === activeKey);
-
-  // ----------------- If window hidden -----------------
-  if (!showWindow) {
-    return (
-      <button
-        className="fixed bottom-4 right-4 px-3 py-2 bg-blue-600 text-white rounded shadow"
-        onClick={() => setShowWindow(true)}
-      >
-        Open Agent Panel
-      </button>
-    );
-  }
+  const close = () => {
+    setShowWindow(false);
+    setShowNewChat(false);
+    setShowHistory(false);
+  };
 
   return (
     <>
-      {/* ---------- Backdrop Overlay ---------- */}
-      <div className="fixed inset-0 bg-black bg-opacity-30 z-40" />
-
-      {/* ---------- Draggable/Resizable Panel ---------- */}
-      <Rnd
-        size={{ width: size.width, height: size.height }}
-        position={{ x: position.x, y: position.y }}
-        onDragStop={(e, d) => setPosition({ x: d.x, y: d.y })}
-        onResizeStop={(e, direction, ref) => {
-          setSize({
-            width: parseInt(ref.style.width, 10),
-            height: parseInt(ref.style.height, 10),
-          });
+      {/* Slide-in panel */}
+      <div
+        className={`fixed top-0 right-0 h-full z-50 flex flex-col bg-white border-l shadow-2xl transition-transform duration-300 ease-in-out`}
+        style={{
+          width: "480px",
+          transform: showWindow ? "translateX(0)" : "translateX(100%)",
         }}
-        bounds="window"
-        minWidth={400}
-        minHeight={300}
-        className="z-50"
       >
-        <div className="flex flex-col h-full border rounded shadow bg-white">
-
-          {/* Top Banner (draggable) */}
-          <div className="flex justify-between items-center bg-gray-100 px-3 py-2 cursor-move border-b">
-            <span className="font-semibold">Agent Streaming</span>
+        {/* Header */}
+        <div className="flex justify-between items-center px-4 py-3 bg-gray-50 border-b flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-sm text-gray-700">Agent</span>
             <button
-              onClick={() => {
-                setShowWindow(false);
-                setShowAgentPopup(false);
-              }}
-              className="text-red-500 hover:text-red-700"
+              onClick={() => { setShowNewChat(s => !s); setShowHistory(false); }}
+              className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
             >
-              ✕
+              + New Chat
+            </button>
+            <button
+              onClick={handleOpenHistory}
+              className="px-2 py-1 text-xs bg-gray-200 text-gray-600 rounded hover:bg-gray-300"
+            >
+              History
             </button>
           </div>
+          <button onClick={close} className="text-gray-400 hover:text-gray-700 text-lg leading-none">✕</button>
+        </div>
 
-          {/* Tabs */}
-          <div className="flex space-x-2 border-b px-2 py-1 bg-gray-50">
-            {threads.map(t => (
-              <div
-                key={t.threadKey}
-                className={`px-3 py-1 rounded-t cursor-pointer flex items-center gap-2
-                  ${t.threadKey === activeKey ? "bg-white border border-b-0" : "bg-gray-200"}
-                `}
-                onClick={() => setActiveKey(t.threadKey)}
-              >
-                <span>{t.title}</span>
+        {/* New Chat Form */}
+        {showNewChat && (
+          <div className="border-b px-4 py-3 bg-blue-50 flex-shrink-0 space-y-2">
+            <p className="text-xs text-gray-500">Ask the agent anything:</p>
+            <div className="flex gap-1 flex-wrap">
+              {QUICK_ACTIONS.map(q => (
                 <button
-                  onClick={e => {
-                    e.stopPropagation();
-                    closeThread(t.threadKey);
-                  }}
-                  className="text-red-500 hover:text-red-700"
+                  key={q}
+                  onClick={() => setNewChatInput(q)}
+                  className="text-xs px-2 py-1 bg-white border rounded hover:bg-gray-50"
                 >
-                  ✕
+                  {q}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                autoFocus
+                className="flex-1 border rounded px-2 py-1 text-sm"
+                placeholder="Type your question..."
+                value={newChatInput}
+                onChange={e => setNewChatInput(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && startNewChat()}
+              />
+              <button
+                onClick={startNewChat}
+                disabled={!newChatInput.trim()}
+                className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40"
+              >
+                Start
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* History Panel */}
+        {showHistory && (
+          <div className="border-b px-4 py-3 bg-gray-50 flex-shrink-0 overflow-y-auto max-h-56">
+            <p className="text-xs font-medium text-gray-500 mb-2">Previous conversations</p>
+            {histLoading && <p className="text-xs text-gray-400">Loading...</p>}
+            {!histLoading && history.length === 0 && (
+              <p className="text-xs text-gray-400">No previous threads.</p>
+            )}
+            {history.map(t => (
+              <div key={t.id} className="flex items-center justify-between py-1.5 border-b last:border-0">
+                <div className="flex-1 min-w-0 mr-2">
+                  <div className="flex items-center gap-1">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${t.thread_source === "user" ? "bg-blue-100 text-blue-600" : "bg-amber-100 text-amber-600"}`}>
+                      {t.thread_source === "user" ? "Chat" : "Inbox"}
+                    </span>
+                    <span className="text-xs text-gray-700 truncate">{t.title || t.external_thread_id}</span>
+                  </div>
+                  <span className="text-[10px] text-gray-400 ml-1">{t.message_count} msg · {new Date(t.created_at).toLocaleDateString()}</span>
+                </div>
+                <button
+                  onClick={() => handleReopenThread(t)}
+                  className="text-xs px-2 py-0.5 bg-white border rounded hover:bg-gray-100 flex-shrink-0"
+                >
+                  Open
                 </button>
               </div>
             ))}
           </div>
+        )}
 
-          {/* Agent content */}
-          <div className="flex-1 overflow-auto p-2">
-            {threads.map(t => (
-              <div
-                key={t.threadKey}
-                style={{ display: t.threadKey === activeKey ? "block" : "none" }}
+        {/* Tabs */}
+        <div className="flex border-b px-2 pt-1 bg-gray-50 overflow-x-auto flex-shrink-0 gap-1">
+          {threads.length === 0 && !showNewChat && (
+            <div className="text-xs text-gray-400 py-2 px-1">
+              Click <strong>+ New Chat</strong> to start
+            </div>
+          )}
+          {threads.map(t => (
+            <div
+              key={t.threadKey}
+              className={`flex items-center gap-1 px-3 py-1.5 rounded-t cursor-pointer whitespace-nowrap text-xs border-b-2 transition-colors
+                ${t.threadKey === activeKey
+                  ? "border-blue-500 bg-white text-gray-800 font-medium"
+                  : "border-transparent text-gray-500 hover:bg-gray-100"
+                }`}
+              onClick={() => { setActiveKey(t.threadKey); setShowNewChat(false); setShowHistory(false); }}
+            >
+              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${t.source === "user" ? "bg-blue-400" : "bg-amber-400"}`} />
+              <span className="max-w-[130px] truncate">{t.title}</span>
+              <button
+                onClick={e => { e.stopPropagation(); closeThread(t.threadKey); }}
+                className="text-gray-300 hover:text-red-500 ml-0.5"
               >
-                <Card className="border shadow-sm">
-                  <CardContent>
-                    <Agent
-                      apiUrl="https://localhost/langgraph-api"
-                      businessId={t.businessId}
-                      initialMessage={t.initialMessage}
-                      threadId={activeKey}
-                    />
-                  </CardContent>
-                </Card>
-              </div>
-            ))}
-          </div>
+                ✕
+              </button>
+            </div>
+          ))}
         </div>
-      </Rnd>
+
+        {/* Agent content */}
+        <div className="flex-1 overflow-hidden">
+          {threads.length === 0 && !showNewChat && (
+            <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+              </svg>
+              <p className="text-sm">No active conversations</p>
+              <button
+                onClick={() => setShowNewChat(true)}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                + New Chat
+              </button>
+            </div>
+          )}
+          {threads.map(t => (
+            <div
+              key={t.threadKey}
+              className="h-full overflow-auto"
+              style={{ display: t.threadKey === activeKey ? "block" : "none" }}
+            >
+              <Agent
+                apiUrl="https://localhost/langgraph-api"
+                businessId={t.businessId}
+                initialMessage={t.initialMessage}
+                threadId={t.threadKey}
+                source={t.source}
+                title={t.title}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Dim overlay — click to close */}
+      {showWindow && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-20 z-40"
+          onClick={close}
+        />
+      )}
     </>
   );
 }

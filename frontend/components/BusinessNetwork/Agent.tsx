@@ -99,11 +99,15 @@ export default function Agent({
   businessId,
   initialMessage,
   threadId: externalThreadId,
+  source = "pubsub",
+  title,
 }: {
   apiUrl: string;
-  businessId: number;
+  businessId: number | null;
   initialMessage: string;
   threadId?: string | null;
+  source?: "pubsub" | "user";
+  title?: string;
 }) {
   const [resolvedThreadId, setResolvedThreadId] = useState<string | null>(null);
   const [loadingInit, setLoadingInit] = useState(true);
@@ -196,7 +200,7 @@ export default function Agent({
   /* 1) Resolve external thread → OpenClaw session key                  */
   /* ------------------------------------------------------------------ */
   useEffect(() => {
-    if (!externalThreadId) {
+    if (!externalThreadId || !businessId) {
       setLoadingInit(false);
       return;
     }
@@ -212,6 +216,8 @@ export default function Agent({
             external_thread_id: externalThreadId,
             assistant_id: "main",
             business_id: businessId,
+            thread_source: source,
+            title: title ?? initialMessage?.slice(0, 60) ?? null,
           }),
         });
 
@@ -289,6 +295,8 @@ export default function Agent({
     if (!resolvedThreadId) return;
     if (hasSentInitial.current) return;
     hasSentInitial.current = true;
+
+    if (!initialMessage?.trim()) return; // reopened thread — no auto-send
 
     (async () => {
       setTraceSteps([]);

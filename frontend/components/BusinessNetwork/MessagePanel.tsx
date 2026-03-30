@@ -5,8 +5,8 @@ import { Button } from "../ui/button";
 import toast from "react-hot-toast";
 import { CodeSnippets } from "./CodeSnippets"
 import GuidedMessageEditor from "./GuidedMessageEditor"
-import MultiThread from "./MultiThread";   // 👈 import
 import useReliableWebsocket from "./useReliableWebsocket"
+import { useAgentPanel } from "../../context/AgentPanelContext";
 import { useNeighbors, Neighbor } from "./useNeighbors";
 import ChannelSelector from "./ChannelSelector"
 
@@ -33,9 +33,11 @@ export default function MessagePanel({
   setSelectedRecipients?: (fn: Record<number, boolean>) => void | null;
   setSelectedSenders?: (fn: Record<number, boolean>) => void | null;
 }) {
+  const { openPubsubThread } = useAgentPanel();
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
-  
+
   const [triggerAgent, setTriggerAgent] = useState(true);
   const triggerAgentRef = useRef(triggerAgent);
 
@@ -67,8 +69,7 @@ export default function MessagePanel({
           // not JSON — pass through as-is
         }
       }
-      setAgentMessage(agentMsg);
-      setShowAgentPopup(true);
+      openPubsubThread(agentMsg);
     }
   });
 
@@ -80,9 +81,6 @@ export default function MessagePanel({
   const [showCode, setShowCode] = useState(false);
 
   const isSystemUser = !businessId;
-
-  const [showAgentPopup, setShowAgentPopup] = useState(false);
-  const [agentMessage, setAgentMessage] = useState<string | null>(null);
 
   // Initialize neighbors with type field
   const neighbors: Neighbor[] = isSystemUser
@@ -333,18 +331,6 @@ export default function MessagePanel({
           />}
         </>}
       </CardContent>
-      {/* Agent Popup */}
-      {!isSystemUser && showAgentPopup && agentMessage && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-lg w-2/3 max-w-2xl">
-            <MultiThread
-              businessId={businessId}
-              initialMessage={agentMessage}
-              setShowAgentPopup={setShowAgentPopup}
-            />
-          </div>
-        </div>
-      )}      
     </Card>
 
   );

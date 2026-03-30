@@ -135,6 +135,18 @@ async def _publish_agui(business_id: int, event: dict) -> None:
     await publish_message(channel, {"from": "-1", "text": json.dumps(event)})
 
 
+def _inject_context(req: AgUIChatRequest) -> list:
+    """Prepend a system message with business context so the agent always knows who it's talking to."""
+    system_msg = {
+        "role": "system",
+        "content": f"[Context: business_id={req.business_id}, thread_id={req.thread_id}]",
+    }
+    # Only prepend if no system message already present
+    if req.messages and req.messages[0].get("role") == "system":
+        return req.messages
+    return [system_msg] + req.messages
+
+
 async def _run_agui_chat(req: AgUIChatRequest, run_id: str) -> None:
     """Background task: proxy to OpenClaw SSE and emit AG-UI events into Redis."""
     biz = req.business_id
@@ -158,7 +170,7 @@ async def _run_agui_chat(req: AgUIChatRequest, run_id: str) -> None:
                     "x-openclaw-session-key": req.session_key,
                     "Content-Type": "application/json",
                 },
-                json={"model": req.model, "messages": req.messages, "stream": True},
+                json={"model": req.model, "messages": _inject_context(req), "stream": True},
             ) as resp:
                 buffer = ""
                 async for chunk in resp.aiter_bytes():
