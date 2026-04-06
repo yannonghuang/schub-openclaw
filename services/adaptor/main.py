@@ -251,7 +251,9 @@ def process_message(uid: bytes, raw: bytes) -> None:
 
     # Build candidate list: In-Reply-To first (most specific), then References
     # in reverse order (most recent parent first).
-    ref_ids    = references.split() if references else []
+    # RFC 2822 says References are whitespace-separated, but iCloud Mail (and
+    # others) sometimes uses comma+no-space, so split on whitespace OR commas.
+    ref_ids    = re.split(r'[\s,]+', references) if references else []
     candidates = []
     if in_reply_to:
         candidates.append(in_reply_to)

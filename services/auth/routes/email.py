@@ -119,6 +119,8 @@ def get_pending_hitl_by_subject(subject: str, db: Session = Depends(get_session)
             base = base[len(prefix):].strip()
             break
 
+    # Prefer pending; fall back to most recent resumed (re-resume logic mirrors
+    # the adaptor's _find_hitl chain-walking fallback)
     hitl = (
         db.query(EmailHitl)
         .filter(EmailHitl.subject == base, EmailHitl.status == "pending")
@@ -126,7 +128,14 @@ def get_pending_hitl_by_subject(subject: str, db: Session = Depends(get_session)
         .first()
     )
     if not hitl:
-        raise HTTPException(404, "No pending HITL found for this subject")
+        hitl = (
+            db.query(EmailHitl)
+            .filter(EmailHitl.subject == base, EmailHitl.status == "resumed")
+            .order_by(EmailHitl.created_at.desc())
+            .first()
+        )
+    if not hitl:
+        raise HTTPException(404, "No HITL found for this subject")
     return {
         "message_id": hitl.message_id,
         "session_key": hitl.session_key,
