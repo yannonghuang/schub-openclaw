@@ -118,7 +118,46 @@ exec curl -s -X POST http://switch-service:6000/publish \
 
 ### Step 3 — Handle approval (on resume or auto-approve)
 
-When approved (either auto or via human reply resuming this session):
+**First: classify the reply intent** (skip this if auto-approved from Step 2 low-impact path):
+
+Read the reply text from the incoming message and determine the human's intent:
+- **APPROVED** — the human is giving a clear go-ahead to proceed with the order
+- **REJECTED** — the human is explicitly cancelling or blocking the order
+- **NEEDS_MORE_TIME** — the human is not yet ready to decide (needs more time, asking a question, expressing uncertainty, or anything ambiguous)
+
+Use your judgment based on the meaning of the reply, not specific words.
+
+**If REJECTED:**
+Read the context file and publish a rejection trace:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Order rejected by human — cancelling\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+```
+Send a rejection notification to the source business:
+```
+exec curl -s -X POST http://auth-service:4000/send-email \
+  -H 'Content-Type: application/json' \
+  -d '{"business_id": BUSINESS_ID, "recipients": [SOURCE_BUSINESS_ID], "subject": "Order Analysis Result", "body": "Order analysis complete. Outcome: rejected by human approver. Materials: MATERIALS."}'
+```
+End turn returning: `{"outcome": "rejected"}`. Do NOT proceed to Step 4.
+
+**If NEEDS_MORE_TIME:**
+Recover the context file:
+```
+exec cat /tmp/order_ctx_BUSINESS_ID_MESSAGE_ID.json
+```
+Publish a waiting trace:
+```
+exec curl -s -X POST http://switch-service:6000/publish \
+  -H 'Content-Type: application/json' \
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Human needs more time — resending approval request...\", \"agent\": \"order\", \"level\": \"waiting\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+```
+Resend the approval email (this creates a fresh HITL the user can reply to):
+Use the `send_email` skill with the same subject, same recipients, same body as the original approval email, and with `session_key` set to YOUR current session key. This gives the user a new email to reply to so the reply reaches this session correctly.
+End turn returning: `{"outcome": "pending_approval_resent", "session_key": "YOUR_SESSION_KEY"}`. Do NOT proceed to Step 4.
+
+**If APPROVED (or auto-approved):**
 
 **Idempotency check first**: scan your session history. If a prior turn already completed Step 3 (callback to `_material_session_key` was already sent, or notification email already sent), output `{"outcome": "approved", "note": "already_processed"}` and stop immediately.
 
