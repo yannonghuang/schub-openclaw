@@ -222,6 +222,25 @@ def resume_session(session_key: str, agent_id: str, body: str) -> None:
 # IMAP polling
 # ---------------------------------------------------------------------------
 
+def _find_hitl_by_subject(subject: str) -> tuple[str, dict] | None:
+    """Fallback: match a pending HITL by email subject (handles clients that strip References)."""
+    if not subject:
+        return None
+    try:
+        resp = httpx.get(
+            f"{BACKEND_URL}/email-hitl/subject/pending",
+            params={"subject": subject},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            hitl = resp.json()
+            log.info("Subject fallback matched HITL %r for subject %r", hitl["message_id"], subject)
+            return hitl["message_id"], hitl
+    except Exception as e:
+        log.warning("Subject-based HITL lookup failed: %s", e)
+    return None
+
+
 def process_message(uid: bytes, raw: bytes) -> None:
     msg         = email.message_from_bytes(raw)
     in_reply_to = msg.get("In-Reply-To", "").strip()
@@ -247,7 +266,13 @@ def process_message(uid: bytes, raw: bytes) -> None:
 
     result = _find_hitl(candidates)
     if result is None:
-        log.debug("No HITL record found in References chain — not a managed reply")
+        # References chain walking failed — try subject-line fallback (handles
+        # Outlook and other clients that strip the full References header)
+        subject = msg.get("Subject", "").strip()
+        result = _find_hitl_by_subject(subject)
+
+    if result is None:
+        log.debug("No HITL record found (chain + subject fallback) — not a managed reply")
         return
 
     matched_id, hitl = result

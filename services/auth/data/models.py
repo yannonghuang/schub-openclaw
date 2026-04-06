@@ -374,6 +374,7 @@ class EmailHitl(Base):
     session_key = Column(String, nullable=False)   # OpenClaw session key to resume
     agent_id    = Column(String, nullable=False, default="")
     business_id = Column(Integer, nullable=False)
+    subject     = Column(String, nullable=True, index=True)   # email subject for fallback matching
     status      = Column(String, nullable=False, default="pending")  # pending|resumed
     created_at  = Column(DateTime, nullable=False, default=datetime.utcnow)
 

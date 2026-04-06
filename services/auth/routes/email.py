@@ -80,6 +80,7 @@ def send_email(req: SendEmailRequest, db: Session = Depends(get_session)):
             session_key=req.session_key,
             agent_id=req.agent_id,
             business_id=req.business_id,
+            subject=req.subject,
         )
         db.add(hitl)
         db.commit()
@@ -94,6 +95,38 @@ def get_email_hitl(message_id: str, db: Session = Depends(get_session)):
     hitl = db.query(EmailHitl).filter(EmailHitl.message_id == message_id).one_or_none()
     if not hitl:
         raise HTTPException(404, "No HITL session found for this message_id")
+    return {
+        "message_id": hitl.message_id,
+        "session_key": hitl.session_key,
+        "agent_id": hitl.agent_id,
+        "business_id": hitl.business_id,
+        "status": hitl.status,
+    }
+
+
+@router.get("/email-hitl/subject/pending")
+def get_pending_hitl_by_subject(subject: str, db: Session = Depends(get_session)):
+    """
+    Fallback lookup: find a pending HITL whose subject matches the reply subject.
+    Email clients (e.g. Outlook) sometimes strip the References chain, making
+    message-id walking impossible. Matching on 'Re: <original subject>' recovers
+    the session in those cases.
+    """
+    # Strip leading Re:/Fwd: prefixes to get the base subject
+    base = subject.strip()
+    for prefix in ("Re:", "RE:", "Fwd:", "FWD:", "Fw:", "FW:"):
+        if base.startswith(prefix):
+            base = base[len(prefix):].strip()
+            break
+
+    hitl = (
+        db.query(EmailHitl)
+        .filter(EmailHitl.subject == base, EmailHitl.status == "pending")
+        .order_by(EmailHitl.created_at.desc())
+        .first()
+    )
+    if not hitl:
+        raise HTTPException(404, "No pending HITL found for this subject")
     return {
         "message_id": hitl.message_id,
         "session_key": hitl.session_key,
