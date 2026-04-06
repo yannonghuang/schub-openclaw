@@ -103,6 +103,26 @@ def get_email_hitl(message_id: str, db: Session = Depends(get_session)):
     }
 
 
+@router.get("/email-hitl/session/{session_key}/pending")
+def get_pending_hitl_for_session(session_key: str, db: Session = Depends(get_session)):
+    """Return the most recent pending HITL for a session key, or 404 if none."""
+    hitl = (
+        db.query(EmailHitl)
+        .filter(EmailHitl.session_key == session_key, EmailHitl.status == "pending")
+        .order_by(EmailHitl.created_at.desc())
+        .first()
+    )
+    if not hitl:
+        raise HTTPException(404, "No pending HITL found for this session")
+    return {
+        "message_id": hitl.message_id,
+        "session_key": hitl.session_key,
+        "agent_id": hitl.agent_id,
+        "business_id": hitl.business_id,
+        "status": hitl.status,
+    }
+
+
 @router.put("/email-hitl/{message_id}/resume")
 def mark_hitl_resumed(message_id: str, db: Session = Depends(get_session)):
     """Mark a HITL email session as resumed (called by the IMAP adapter after posting to OpenClaw)."""

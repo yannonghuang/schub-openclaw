@@ -6,12 +6,13 @@ Flow:
   1. Poll IMAP inbox every POLL_INTERVAL seconds for new messages.
   2. Tracks processed UIDs in a local JSON file — independent of the IMAP
      \\Seen flag, so other mail clients (Apple Mail, etc.) cannot cause misses.
-  3. For each new message that has an In-Reply-To header, call auth-service
-     GET /email-hitl/{message_id} to find the waiting session key.
-  4. Classify the reply body (approved / rejected / ambiguous).
-  5. POST to OpenClaw /v1/chat/completions with x-openclaw-session-key
-     so the paused agent turn resumes.
-  6. Mark the HITL record as resumed via PUT /email-hitl/{message_id}/resume.
+  3. Walk the In-Reply-To + References chain to find a pending HITL record.
+     If the found HITL is already "resumed" (e.g. a "needs_more_time" reply
+     was processed earlier), checks for a newer pending HITL on the same
+     session, or re-resumes the original so a definitive answer is never lost.
+  4. POST the raw reply body to OpenClaw — the agent classifies intent
+     (approved / rejected / needs_more_time). Adaptor stays stateless.
+  5. Mark the matched HITL record as resumed via PUT /email-hitl/{id}/resume.
 """
 
 import email
@@ -69,28 +70,73 @@ def _save_seen() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Reply classification
+# HITL lookup — walks the full References chain to find a matching record
 # ---------------------------------------------------------------------------
 
-_APPROVED = re.compile(
-    r"\b(approv(e|ed|es)|yes|confirm(ed)?|ok(ay)?|proceed|go ahead|accept(ed)?|agree(d)?)\b",
-    re.IGNORECASE,
-)
-_REJECTED = re.compile(
-    r"\b(reject(ed)?|no|deny|denied|declin(e|ed)|cancel(led)?|stop|refuse(d)?)\b",
-    re.IGNORECASE,
-)
+def _find_hitl(candidates: list[str]) -> tuple[str, dict] | None:
+    """
+    Walk a list of message-ids (most specific first) and return the first
+    matching HITL record as (message_id, hitl_dict).
 
+    Returns None if no matching HITL is found at all.
+    Prefers "pending" records; falls back to "resumed" if nothing pending exists.
+    """
+    resumed_candidate: tuple[str, dict] | None = None
 
-def classify(text: str) -> str:
-    text = text[:300]   # only look at first 300 chars — user's reply before any quoted history
-    approved = bool(_APPROVED.search(text))
-    rejected = bool(_REJECTED.search(text))
-    if approved and not rejected:
-        return "approved"
-    if rejected and not approved:
-        return "rejected"
-    return "ambiguous"
+    for mid in candidates:
+        mid = mid.strip()
+        if not mid:
+            continue
+        try:
+            resp = httpx.get(f"{BACKEND_URL}/email-hitl/{mid}", timeout=10)
+        except Exception as e:
+            log.warning("HITL lookup failed for %r: %s", mid, e)
+            continue
+
+        if resp.status_code == 404:
+            continue
+        if resp.status_code != 200:
+            log.warning("Unexpected status %s for %r", resp.status_code, mid)
+            continue
+
+        hitl = resp.json()
+        if hitl.get("status") == "pending":
+            return mid, hitl   # best match — use immediately
+
+        if hitl.get("status") == "resumed" and resumed_candidate is None:
+            resumed_candidate = (mid, hitl)   # remember first resumed hit
+
+    # No pending HITL found in chain. If we saw a resumed one, check whether
+    # the agent created a newer pending HITL for the same session (e.g. after
+    # a "needs_more_time" reply it sent a follow-up email with a new HITL).
+    if resumed_candidate is not None:
+        _, resumed_hitl = resumed_candidate
+        session_key = resumed_hitl.get("session_key", "")
+        try:
+            resp = httpx.get(
+                f"{BACKEND_URL}/email-hitl/session/{session_key}/pending",
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                newer = resp.json()
+                log.info(
+                    "Found newer pending HITL %r for session %s (original was resumed)",
+                    newer["message_id"], session_key,
+                )
+                return newer["message_id"], newer
+        except Exception as e:
+            log.warning("Pending HITL session lookup failed: %s", e)
+
+        # No newer pending HITL — the user replied to the original thread
+        # after the agent decided to wait (needs_more_time). Re-resume the
+        # original session so the agent can process the definitive answer.
+        log.info(
+            "No newer pending HITL for session %s — re-resuming original",
+            session_key,
+        )
+        return resumed_candidate
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -140,11 +186,8 @@ def extract_body(msg: email.message.Message) -> str:
 # OpenClaw resume
 # ---------------------------------------------------------------------------
 
-def resume_session(session_key: str, agent_id: str, classification: str, body: str) -> None:
-    content = (
-        f"Human replied to HITL email. Classification: {classification}. "
-        f"Reply: {body[:500]}"
-    )
+def resume_session(session_key: str, agent_id: str, body: str) -> None:
+    content = f"Human replied to HITL email. Reply: {body[:500]}"
 
     def _stream_to_completion() -> None:
         try:
@@ -180,51 +223,47 @@ def resume_session(session_key: str, agent_id: str, classification: str, body: s
 # ---------------------------------------------------------------------------
 
 def process_message(uid: bytes, raw: bytes) -> None:
-    msg = email.message_from_bytes(raw)
+    msg         = email.message_from_bytes(raw)
     in_reply_to = msg.get("In-Reply-To", "").strip()
     references  = msg.get("References", "").strip()
 
-    # Pick the most specific reference (In-Reply-To first, then last in References)
-    original_id = in_reply_to
-    if not original_id and references:
-        original_id = references.split()[-1]
+    if not in_reply_to and not references:
+        return   # Not a reply — skip
 
-    if not original_id:
-        return   # Not a reply, skip
+    # Build candidate list: In-Reply-To first (most specific), then References
+    # in reverse order (most recent parent first).
+    ref_ids    = references.split() if references else []
+    candidates = []
+    if in_reply_to:
+        candidates.append(in_reply_to)
+    for mid in reversed(ref_ids):
+        if mid not in candidates:
+            candidates.append(mid)
 
-    log.info("Reply to %r — looking up HITL session", original_id)
+    if not candidates:
+        return
 
+    log.info("Reply — walking %d candidate message-id(s) to find HITL", len(candidates))
+
+    result = _find_hitl(candidates)
+    if result is None:
+        log.debug("No HITL record found in References chain — not a managed reply")
+        return
+
+    matched_id, hitl = result
+    body = extract_body(msg)
+    log.info("Resuming session %s (matched HITL %r)", hitl["session_key"], matched_id)
+
+    # Delegate classification entirely to the agent — adaptor stays stateless
+    resume_session(hitl["session_key"], hitl.get("agent_id", ""), body)
+
+    # Mark HITL as resumed to prevent duplicate processing on re-delivery
     try:
-        resp = httpx.get(f"{BACKEND_URL}/email-hitl/{original_id}", timeout=10)
+        httpx.put(f"{BACKEND_URL}/email-hitl/{matched_id}/resume", timeout=10)
     except Exception as e:
-        log.error("auth-service lookup failed: %s", e)
-        return
+        log.warning("Failed to mark HITL %r as resumed: %s", matched_id, e)
 
-    if resp.status_code == 404:
-        log.debug("No HITL record for %r — not a managed reply", original_id)
-        return
-    if resp.status_code != 200:
-        log.error("auth-service returned %s for %r", resp.status_code, original_id)
-        return
-
-    hitl = resp.json()
-    if hitl.get("status") == "resumed":
-        log.info("Session %s already resumed, skipping", hitl["session_key"])
-        return
-
-    body           = extract_body(msg)
-    classification = classify(body)
-    log.info("Reply classified as %r for session %s", classification, hitl["session_key"])
-
-    resume_session(hitl["session_key"], hitl.get("agent_id", ""), classification, body)
-
-    # Mark as resumed so duplicate deliveries are ignored
-    try:
-        httpx.put(f"{BACKEND_URL}/email-hitl/{original_id}/resume", timeout=10)
-    except Exception as e:
-        log.warning("Failed to mark HITL as resumed: %s", e)
-
-    # Publish schub/hitl_reply so the Agent UI knows the email was handled
+    # Publish schub/hitl_reply so the Agent UI reflects the email reply
     try:
         httpx.post(
             SWITCH_URL,
@@ -235,9 +274,8 @@ def process_message(uid: bytes, raw: bytes) -> None:
                     "name": "schub/hitl_reply",
                     "value": {
                         "threadId": hitl["session_key"],
-                        "approved": classification == "approved",
                         "messageContent": body[:200],
-                        "idempotencyKey": f"email:{original_id}",
+                        "idempotencyKey": f"email:{matched_id}",
                         "businessId": hitl.get("business_id"),
                     },
                     "timestamp": int(time.time() * 1000),
