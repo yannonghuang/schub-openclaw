@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import Agent from "./Agent";
 import { useAgentPanel } from "../../context/AgentPanelContext";
 import { useThreadHistory } from "../../hooks/useThreadHistory";
@@ -27,6 +27,30 @@ export default function MultiThread() {
   const [newChatInput, setNewChatInput] = useState("");
   const [showHistory, setShowHistory] = useState(false);
   const { threads: history, loading: histLoading, reload: reloadHistory } = useThreadHistory(businessId);
+
+  const MIN_WIDTH = 320;
+  const MAX_WIDTH = typeof window !== "undefined" ? Math.round(window.innerWidth * 0.9) : 1200;
+  const [panelWidth, setPanelWidth] = useState(480);
+  const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const onResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragState.current = { startX: e.clientX, startWidth: panelWidth };
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!dragState.current) return;
+      const delta = dragState.current.startX - ev.clientX;
+      const next = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, dragState.current.startWidth + delta));
+      setPanelWidth(next);
+    };
+    const onMouseUp = () => {
+      dragState.current = null;
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  }, [panelWidth, MAX_WIDTH]);
 
   const startNewChat = () => {
     if (!newChatInput.trim()) return;
@@ -61,12 +85,18 @@ export default function MultiThread() {
     <>
       {/* Slide-in panel */}
       <div
-        className={`fixed top-0 right-0 h-full z-50 flex flex-col bg-white border-l shadow-2xl transition-transform duration-300 ease-in-out`}
+        className="fixed top-0 right-0 h-full z-50 flex flex-col bg-white border-l shadow-2xl transition-transform duration-300 ease-in-out"
         style={{
-          width: "480px",
+          width: `${panelWidth}px`,
           transform: showWindow ? "translateX(0)" : "translateX(100%)",
         }}
       >
+        {/* Left-edge resize handle */}
+        <div
+          onMouseDown={onResizeMouseDown}
+          className="absolute top-0 left-0 h-full w-1.5 cursor-ew-resize hover:bg-blue-300 active:bg-blue-400 transition-colors z-10"
+          title="Drag to resize"
+        />
         {/* Header */}
         <div className="flex justify-between items-center px-4 py-3 bg-gray-50 border-b flex-shrink-0">
           <div className="flex items-center gap-2">

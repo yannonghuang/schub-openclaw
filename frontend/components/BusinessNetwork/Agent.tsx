@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { Resizable } from "re-resizable";
 import { useAGUIStream, type ChatMessage } from "../../hooks/useAGUIStream";
 import type { TraceEvent, ToolCallEndEvent, HITLReplyEvent } from "../../types/agui-events";
+import { AuditEventTraceability } from "../audit/AuditEventTraceability";
 
 /* ------------------------------------------------------------------ */
 /* Step event types                                                    */
@@ -27,8 +28,19 @@ function Tool_Spinner() {
   );
 }
 
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return "<1s";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `+${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem > 0 ? `+${m}m${rem}s` : `+${m}m`;
+}
+
 function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowActive: boolean }) {
   if (steps.length === 0 && !workflowActive) return null;
+
+  const t0 = steps[0]?.ts ?? 0;
 
   return (
     <div className={`rounded border px-3 py-2 text-xs space-y-1 ${workflowActive ? "border-blue-100 bg-blue-50 text-gray-600" : "border-gray-200 bg-gray-50 text-gray-500"}`}>
@@ -64,12 +76,19 @@ function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowAct
           ? isWaiting ? "text-blue-500 italic" : "text-blue-600 font-medium"
           : isDetail ? "text-gray-400" : "text-gray-600";
 
+        const elapsed = i > 0 && t0 > 0 && s.ts > 0 ? formatElapsed(s.ts - t0) : null;
+
         return (
           <div key={i} className={`flex items-center gap-2 ${isDetail ? "pl-3" : ""}`}>
             {indicator}
-            <span className={`${isDetail ? "text-[11px]" : "text-xs"} ${labelClass}`}>
+            <span className={`${isDetail ? "text-[11px]" : "text-xs"} ${labelClass} flex-1 min-w-0`}>
               {s.agent ? `[${s.agent}] ` : ""}{s.label}
             </span>
+            {elapsed && (
+              <span className="text-[10px] text-gray-300 flex-shrink-0 tabular-nums font-mono">
+                {elapsed}
+              </span>
+            )}
           </div>
         );
       })}
@@ -89,6 +108,66 @@ function normalizeContent(raw: any, isStreaming = false): string {
     }
   }
   return String(raw);
+}
+
+/* ------------------------------------------------------------------ */
+/* MessageTable — scrollable message list with a visible drag handle  */
+/* ------------------------------------------------------------------ */
+function MessageTable({ height, onHeightChange, isLoading, messages, steps }: {
+  height: number;
+  onHeightChange: (h: number) => void;
+  isLoading: boolean;
+  messages: ChatMessage[];
+  steps: StepEvent[];
+}) {
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+
+  const onHandleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { startY: e.clientY, startH: height };
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current) return;
+      const next = Math.min(800, Math.max(80, dragRef.current.startH + ev.clientY - dragRef.current.startY));
+      onHeightChange(next);
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  return (
+    <div className="border rounded shadow-sm bg-white flex flex-col" style={{ height }}>
+      <div className="p-2 flex-1 overflow-y-auto space-y-3 bg-gray-50" style={{ minHeight: 0 }}>
+        {messages.map((m, idx) => {
+          const isLastMsg = idx === messages.length - 1;
+          const isStreamingThis = isLoading && isLastMsg && m.role === "assistant";
+          return (
+            <div key={`${m.role}-${idx}`} className="p-2 rounded border bg-white shadow-sm">
+              <div className="font-semibold capitalize mb-1 text-blue-600">
+                {`${m.role}: ${m.created_at ?? ""}`}
+              </div>
+              <pre className="whitespace-pre-wrap text-sm overflow-x-auto bg-gray-100 p-2 rounded">
+                {normalizeContent(m.content, isStreamingThis)}
+              </pre>
+            </div>
+          );
+        })}
+        {isLoading && steps.length === 0 && <Tool_Spinner />}
+      </div>
+      {/* Visible drag handle */}
+      <div
+        onMouseDown={onHandleMouseDown}
+        className="flex-shrink-0 h-2 bg-gray-200 hover:bg-blue-300 active:bg-blue-400 cursor-ns-resize transition-colors flex items-center justify-center"
+        title="Drag to resize"
+      >
+        <div className="w-8 h-0.5 bg-gray-400 rounded-full" />
+      </div>
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -118,6 +197,9 @@ export default function Agent({
   const [traceSteps, setTraceSteps] = useState<StepEvent[]>([]);
   const [workflowActive, setWorkflowActive] = useState(false);
   const workflowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Auto-open timeline for reopened threads (no initialMessage = history view)
+  const [showTimeline, setShowTimeline] = useState(!initialMessage?.trim());
+  const [msgHeight, setMsgHeight] = useState(300);
 
   /* ------------------------------------------------------------------ */
   /* AG-UI SSE stream — single channel for all events                   */
@@ -338,37 +420,35 @@ export default function Agent({
     <div className="p-4 space-y-4">
       <h2 className="text-lg font-semibold">Agent Run</h2>
 
-      <Resizable
-        defaultSize={{ width: "100%", height: 600 }}
-        minHeight={200}
-        maxHeight={800}
-        className="border rounded shadow-sm bg-white"
-      >
-        <div className="p-2 h-full overflow-y-auto space-y-3 bg-gray-50">
-          {allMessages.map((m, idx) => {
-            const isLastMsg = idx === allMessages.length - 1;
-            const isStreamingThis =
-              isLoading && isLastMsg && m.role === "assistant";
-            return (
-              <div
-                key={`${m.role}-${idx}`}
-                className="p-2 rounded border bg-white shadow-sm"
-              >
-                <div className="font-semibold capitalize mb-1 text-blue-600">
-                  {`${m.role}: ${m.created_at ?? ""}`}
-                </div>
-                <pre className="whitespace-pre-wrap text-sm overflow-x-auto bg-gray-100 p-2 rounded">
-                  {normalizeContent(m.content, isStreamingThis)}
-                </pre>
-              </div>
-            );
-          })}
-
-          {isLoading && traceSteps.length === 0 && steps.length === 0 && <Tool_Spinner />}
-        </div>
-      </Resizable>
+      <MessageTable height={msgHeight} onHeightChange={setMsgHeight} isLoading={isLoading} messages={allMessages} steps={traceSteps.length > 0 ? traceSteps : steps} />
 
       <StepsTrace steps={traceSteps.length > 0 ? traceSteps : steps} workflowActive={workflowActive || isLoading} />
+
+      {!workflowActive && !isLoading && resolvedThreadId && (
+        <div className="mt-1">
+          <button
+            onClick={() => setShowTimeline(s => !s)}
+            className="text-[11px] text-blue-500 hover:text-blue-700 hover:underline"
+          >
+            {showTimeline ? "Hide timeline" : "View timeline →"}
+          </button>
+          {showTimeline && (
+            <Resizable
+              defaultSize={{ width: "100%", height: 256 }}
+              minHeight={120}
+              maxHeight={800}
+              enable={{ bottom: true }}
+              handleStyles={{ bottom: { bottom: 0, height: 8, cursor: "ns-resize", background: "transparent" } }}
+              handleClasses={{ bottom: "hover:bg-blue-200 transition-colors rounded-b" }}
+              className="mt-2 border rounded bg-white flex flex-col"
+            >
+              <div className="flex-1 overflow-auto" style={{ minHeight: 0 }}>
+                <AuditEventTraceability traceId={resolvedThreadId} />
+              </div>
+            </Resizable>
+          )}
+        </div>
+      )}
 
       <div className="flex gap-2 mt-2">
         <input
