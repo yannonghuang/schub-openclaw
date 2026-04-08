@@ -221,6 +221,7 @@ Return this exact JSON as your final response (replacing placeholders with actua
 ---
 
 ## Rules
+- **Email language**: The system context includes a `locale` field. Write all email subjects and bodies in the matching language: `locale=zh` → Chinese, `locale=en` (or absent) → English. Apply this to every email you send (approval request, rejection notification, approval notification).
 - Always include `business_id` in all tool calls.
 - Invoke `order_engine` at most once.
 - Do not poll for job results — wait for the engine callback to resume this session.

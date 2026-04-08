@@ -132,6 +132,7 @@ class AgUIChatRequest(BaseModel):
     business_id: int
     thread_id: str
     run_id: str | None = None
+    locale: str = "en"
 
 
 async def _publish_agui(business_id: int, event: dict) -> None:
@@ -231,7 +232,7 @@ def _inject_context(req: AgUIChatRequest) -> list:
     """Prepend a system message with business context so the agent always knows who it's talking to."""
     system_msg = {
         "role": "system",
-        "content": f"[Context: business_id={req.business_id}, thread_id={req.thread_id}]",
+        "content": f"[Context: business_id={req.business_id}, thread_id={req.thread_id}, locale={req.locale}]",
     }
     # Only prepend if no system message already present
     if req.messages and req.messages[0].get("role") == "system":

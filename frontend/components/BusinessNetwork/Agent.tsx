@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useRouter } from "next/router";
 import { Resizable } from "re-resizable";
 import { useTranslation } from "next-i18next/pages";
 import { useAGUIStream, type ChatMessage } from "../../hooks/useAGUIStream";
@@ -192,6 +193,7 @@ export default function Agent({
   source?: "pubsub" | "user";
   title?: string;
 }) {
+  const { locale } = useRouter();
   const [resolvedThreadId, setResolvedThreadId] = useState<string | null>(null);
   const [loadingInit, setLoadingInit] = useState(true);
   const hasSentInitial = useRef(false);
@@ -275,6 +277,7 @@ export default function Agent({
           messages: [{ role: "user", content: userContent }],
           business_id: businessId,
           thread_id: resolvedThreadId,
+          locale: locale ?? "en",
         }),
       });
     } catch (err) {
