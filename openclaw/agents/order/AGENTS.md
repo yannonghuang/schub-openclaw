@@ -146,12 +146,16 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Order rejected by human — cancelling\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
-Send a rejection notification to the source business:
+Send a rejection notification to the source business. Use the subject and body for the correct locale:
+- `LOCALE=en`: subject `"Order Analysis Result"`, body `"Order analysis complete. Outcome: rejected by human approver. Materials: MATERIALS."`
+- `LOCALE=zh`: subject `"订单分析结果"`, body `"订单分析完成。结果：已被人工审核员拒绝。物料：MATERIALS。"`
+
 ```
 exec curl -s -X POST http://auth-service:4000/send-email \
   -H 'Content-Type: application/json' \
-  -d '{"business_id": BUSINESS_ID, "recipients": [SOURCE_BUSINESS_ID], "subject": "Order Analysis Result", "body": "Order analysis complete. Outcome: rejected by human approver. Materials: MATERIALS."}'
+  -d '{"business_id": BUSINESS_ID, "recipients": [SOURCE_BUSINESS_ID], "subject": "SUBJECT", "body": "BODY"}'
 ```
+Replace SUBJECT and BODY with the locale-appropriate values above (with MATERIALS substituted).
 End turn returning: `{"outcome": "rejected"}`. Do NOT proceed to Step 4.
 
 **If NEEDS_MORE_TIME:**
@@ -165,8 +169,8 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Human needs more time — resending approval request...\", \"agent\": \"order\", \"level\": \"waiting\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
-Resend the approval email (this creates a fresh HITL the user can reply to):
-Use the `send_email` skill with the same subject, same recipients, same body as the original approval email, and with `session_key` set to YOUR current session key. This gives the user a new email to reply to so the reply reaches this session correctly.
+Resend the approval email in the correct locale (this creates a fresh HITL the user can reply to):
+Use the `send_email` skill with `session_key` set to YOUR current session key, and compose subject and body in the language matching LOCALE (same templates as Step 2). This gives the user a new email to reply to so the reply reaches this session correctly.
 End turn returning: `{"outcome": "pending_approval_resent", "session_key": "YOUR_SESSION_KEY"}`. Do NOT proceed to Step 4.
 
 **If APPROVED (or auto-approved):**
@@ -193,12 +197,16 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Sending result notification to source business...\", \"agent\": \"order\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
-Send a notification email back to the source business:
+Send a notification email back to the source business. Use the subject and body for the correct locale:
+- `LOCALE=en`: subject `"Order Analysis Result"`, body `"Order analysis complete. Outcome: approved. Materials: MATERIALS."`
+- `LOCALE=zh`: subject `"订单分析结果"`, body `"订单分析完成。结果：已批准。物料：MATERIALS。"`
+
 ```
 exec curl -s -X POST http://auth-service:4000/send-email \
   -H 'Content-Type: application/json' \
-  -d '{"business_id": BUSINESS_ID, "recipients": [SOURCE_BUSINESS_ID], "subject": "Order Analysis Result", "body": "Order analysis complete. Outcome: approved. Materials: MATERIALS."}'
+  -d '{"business_id": BUSINESS_ID, "recipients": [SOURCE_BUSINESS_ID], "subject": "SUBJECT", "body": "BODY"}'
 ```
+Replace SUBJECT and BODY with the locale-appropriate values above (with MATERIALS substituted).
 
 If `_material_session_key` is present in the original task, publish a trace event then call back the material session so it can continue its workflow (spawn Planning Agent). Include the **full original event context** so the material session has everything needed to spawn planning:
 ```
