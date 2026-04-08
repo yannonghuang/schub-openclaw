@@ -21,7 +21,32 @@ AUDIT_URL      = os.getenv("AUDIT_URL", "http://audit-service:9000")
 PING_TIMEOUT = 30  # seconds
 REDIS_POLL_INTERVAL = 1.0
 
+LOCALE_TTL = 30 * 24 * 3600  # 30 days
+
 router = APIRouter()
+
+
+# --- Business locale preference ---
+
+class LocaleRequest(BaseModel):
+    business_id: int
+    locale: str = "en"
+
+
+@router.post("/locale")
+async def set_locale(req: LocaleRequest):
+    redis = await get_redis_client()
+    await redis.set(f"locale:biz:{req.business_id}", req.locale, ex=LOCALE_TTL)
+    return {"ok": True}
+
+
+@router.get("/locale/{business_id}")
+async def get_locale(business_id: str):
+    redis = await get_redis_client()
+    val = await redis.get(f"locale:biz:{business_id}")
+    locale = val.decode() if isinstance(val, bytes) else (val or "en")
+    return {"locale": locale or "en"}
+
 
 @router.post("/publish")
 async def publish(msg: Message):
@@ -132,6 +157,7 @@ class AgUIChatRequest(BaseModel):
     business_id: int
     thread_id: str
     run_id: str | None = None
+    locale: str = "en"
 
 
 async def _publish_agui(business_id: int, event: dict) -> None:
@@ -227,11 +253,16 @@ async def _close_last_span(business_id: int) -> None:
         print(f"[audit close_span] {e}")
 
 
-def _inject_context(req: AgUIChatRequest) -> list:
+async def _inject_context(req: AgUIChatRequest) -> list:
     """Prepend a system message with business context so the agent always knows who it's talking to."""
+    # Redis locale is authoritative — overrides the request-level default
+    redis = await get_redis_client()
+    stored = await redis.get(f"locale:biz:{req.business_id}")
+    locale = (stored.decode() if isinstance(stored, bytes) else stored) or req.locale or "en"
+
     system_msg = {
         "role": "system",
-        "content": f"[Context: business_id={req.business_id}, thread_id={req.thread_id}]",
+        "content": f"[Context: business_id={req.business_id}, thread_id={req.thread_id}, locale={locale}]",
     }
     # Only prepend if no system message already present
     if req.messages and req.messages[0].get("role") == "system":
@@ -265,7 +296,7 @@ async def _run_agui_chat(req: AgUIChatRequest, run_id: str) -> None:
                     "x-openclaw-session-key": req.session_key,
                     "Content-Type": "application/json",
                 },
-                json={"model": req.model, "messages": _inject_context(req), "stream": True},
+                json={"model": req.model, "messages": await _inject_context(req), "stream": True},
             ) as resp:
                 buffer = ""
                 async for chunk in resp.aiter_bytes():

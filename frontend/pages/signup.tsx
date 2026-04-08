@@ -11,8 +11,15 @@ import {
   BuildingOfficeIcon,
 } from "@heroicons/react/24/outline";
 import Link from "next/link";
+import { useTranslation } from "next-i18next/pages";
+import { serverSideTranslations } from "next-i18next/pages/serverSideTranslations";
+
+export async function getStaticProps({ locale }: { locale: string }) {
+  return { props: { ...(await serverSideTranslations(locale, ["common", "auth"])) } };
+}
 
 export default function SignUpPage() {
+  const { t } = useTranslation("auth");
   const { signUp } = useAuth();
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -108,7 +115,7 @@ export default function SignUpPage() {
 
   return (
     <AuthLayout>
-      <h2 className="text-center text-xl font-bold mb-4">Sign Up</h2>
+      <h2 className="text-center text-xl font-bold mb-4">{t("signUp.title")}</h2>
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
         {/* Hidden values */}
         <input type="hidden" {...register("token")} />
@@ -239,13 +246,13 @@ export default function SignUpPage() {
         )}
 
         <button type="submit" disabled={loading}>
-          {loading ? "Signing Up..." : "Sign Up"}
+          {loading ? t("buttons.loading", { ns: "common" }) : t("signUp.submit")}
         </button>
 
         <p className="text-sm text-center">
-          Already have an account?{" "}
+          {t("signUp.alreadyHaveAccount")}{" "}
           <Link href="/signin" className="text-blue-600 underline">
-            Sign In
+            {t("signUp.signIn")}
           </Link>
         </p>
       </form>

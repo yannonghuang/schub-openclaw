@@ -1,0 +1,30 @@
+{
+  "search": {
+    "received": "收到",
+    "sent": "发出",
+    "loadMore": "加载更多",
+    "loading": "加载中…",
+    "legend": {
+      "delay": "交货延迟",
+      "quantity": "数量减少",
+      "others": "其他"
+    },
+    "table": {
+      "time": "时间",
+      "type": "类型",
+      "messageId": "消息编号",
+      "materials": "物料",
+      "delay": "延迟",
+      "quantity": "数量降幅 %",
+      "sourceRecipient": "来源 → 接收方"
+    }
+  },
+  "trace": {
+    "title": "溯源",
+    "loading": "加载时间轴…",
+    "error": "加载失败",
+    "spans": "{{count}} 个步骤",
+    "spans_plural": "{{count}} 个步骤",
+    "total": "总计"
+  }
+}

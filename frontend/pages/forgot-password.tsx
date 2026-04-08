@@ -5,6 +5,11 @@ import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import AuthLayout from "../components/AuthLayout";
 import { EnvelopeIcon } from "@heroicons/react/24/outline";
+import { serverSideTranslations } from "next-i18next/pages/serverSideTranslations";
+
+export async function getStaticProps({ locale }: { locale: string }) {
+  return { props: { ...(await serverSideTranslations(locale, ["common", "auth"])) } };
+}
 
 import Link from "next/link";
 

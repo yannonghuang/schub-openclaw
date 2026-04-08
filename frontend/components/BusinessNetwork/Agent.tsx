@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useRouter } from "next/router";
 import { Resizable } from "re-resizable";
+import { useTranslation } from "next-i18next/pages";
 import { useAGUIStream, type ChatMessage } from "../../hooks/useAGUIStream";
 import type { TraceEvent, ToolCallEndEvent, HITLReplyEvent } from "../../types/agui-events";
 import { AuditEventTraceability } from "../audit/AuditEventTraceability";
@@ -20,10 +22,11 @@ interface StepEvent {
 /* UI helpers                                                          */
 /* ------------------------------------------------------------------ */
 function Tool_Spinner() {
+  const { t } = useTranslation("agent");
   return (
     <div className="flex items-center justify-center py-2 text-sm text-gray-500">
       <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mr-2"></div>
-      Agent is working...
+      {t("run.working")}
     </div>
   );
 }
@@ -38,6 +41,8 @@ function formatElapsed(ms: number): string {
 }
 
 function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowActive: boolean }) {
+  const { t } = useTranslation("agent");
+
   if (steps.length === 0 && !workflowActive) return null;
 
   const t0 = steps[0]?.ts ?? 0;
@@ -48,10 +53,10 @@ function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowAct
         {workflowActive ? (
           <>
             <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-            <span className="text-blue-600">Workflow running...</span>
+            <span className="text-blue-600">{t("run.workflowRunning")}</span>
           </>
         ) : (
-          <span className="text-gray-500">{steps.length} step{steps.length !== 1 ? "s" : ""} completed</span>
+          <span className="text-gray-500">{t("run.stepsCompleted", { count: steps.length })}</span>
         )}
       </div>
       {steps.map((s, i) => {
@@ -188,6 +193,7 @@ export default function Agent({
   source?: "pubsub" | "user";
   title?: string;
 }) {
+  const { locale } = useRouter();
   const [resolvedThreadId, setResolvedThreadId] = useState<string | null>(null);
   const [loadingInit, setLoadingInit] = useState(true);
   const hasSentInitial = useRef(false);
@@ -271,6 +277,7 @@ export default function Agent({
           messages: [{ role: "user", content: userContent }],
           business_id: businessId,
           thread_id: resolvedThreadId,
+          locale: locale ?? "en",
         }),
       });
     } catch (err) {
@@ -408,17 +415,19 @@ export default function Agent({
   /* ------------------------------------------------------------------ */
   const allMessages = [...restoredMessages, ...chatMessages];
 
+  const { t } = useTranslation("agent");
+
   if (loadingInit) {
     return (
       <div className="flex items-center justify-center py-4 text-gray-500">
-        Loading thread...
+        {t("run.loadingThread")}
       </div>
     );
   }
 
   return (
     <div className="p-4 space-y-4">
-      <h2 className="text-lg font-semibold">Agent Run</h2>
+      <h2 className="text-lg font-semibold">{t("run.title")}</h2>
 
       <MessageTable height={msgHeight} onHeightChange={setMsgHeight} isLoading={isLoading} messages={allMessages} steps={traceSteps.length > 0 ? traceSteps : steps} />
 
@@ -430,7 +439,7 @@ export default function Agent({
             onClick={() => setShowTimeline(s => !s)}
             className="text-[11px] text-blue-500 hover:text-blue-700 hover:underline"
           >
-            {showTimeline ? "Hide timeline" : "View timeline →"}
+            {showTimeline ? t("run.hideTimeline") : t("run.viewTimeline")}
           </button>
           {showTimeline && (
             <Resizable
@@ -456,7 +465,7 @@ export default function Agent({
           className="flex-1 border rounded px-2 py-1"
           value={userInput}
           onChange={(e) => setUserInput(e.target.value)}
-          placeholder="Type a message..."
+          placeholder={t("run.typeMessage")}
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
         />
         <button
@@ -464,7 +473,7 @@ export default function Agent({
           className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 disabled:opacity-50"
           onClick={sendMessage}
         >
-          Send
+          {t("buttons.send", { ns: "common" })}
         </button>
       </div>
     </div>

@@ -26,9 +26,15 @@ Do not invent values. Omit fields that cannot be inferred.
 
 ## Phase 2 — Execution Flow
 
-### Step 0 — Discover session key
+### Step 0 — Discover session key and locale
 
 Before calling any engine, discover your own session key so the engine can call you back when complete.
+
+Also look up the business locale (for email language) immediately after discovering the session key:
+```
+exec sh -c 'curl -s http://switch-service:6000/locale/BUSINESS_ID | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"locale\",\"en\"))"'
+```
+Replace BUSINESS_ID with the actual business_id from the system context. Store this value as `LOCALE` — use it in every email subject and body below.
 
 Run this exact command (outputs only the UUID, nothing else):
 ```
@@ -118,7 +124,13 @@ exec curl -s -X POST http://switch-service:6000/publish \
 
 ### Step 3 — Handle approval (on resume or auto-approve)
 
-**First: classify the reply intent** (skip this if auto-approved from Step 2 low-impact path):
+**First: look up the locale** (always — this session turn may be a fresh resume where Step 0 was not run):
+```
+exec sh -c 'curl -s http://switch-service:6000/locale/BUSINESS_ID | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"locale\",\"en\"))"'
+```
+Store the output as `LOCALE`. Use it for all email subjects and bodies below.
+
+**Then: classify the reply intent** (skip classification if auto-approved from Step 2 low-impact path):
 
 Read the reply text from the incoming message and determine the human's intent:
 - **APPROVED** — the human is giving a clear go-ahead to proceed with the order
@@ -134,12 +146,16 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Order rejected by human — cancelling\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
-Send a rejection notification to the source business:
+Send a rejection notification to the source business. Use the subject and body for the correct locale:
+- `LOCALE=en`: subject `"Order Analysis Result"`, body `"Order analysis complete. Outcome: rejected by human approver. Materials: MATERIALS."`
+- `LOCALE=zh`: subject `"订单分析结果"`, body `"订单分析完成。结果：已被人工审核员拒绝。物料：MATERIALS。"`
+
 ```
 exec curl -s -X POST http://auth-service:4000/send-email \
   -H 'Content-Type: application/json' \
-  -d '{"business_id": BUSINESS_ID, "recipients": [SOURCE_BUSINESS_ID], "subject": "Order Analysis Result", "body": "Order analysis complete. Outcome: rejected by human approver. Materials: MATERIALS."}'
+  -d '{"business_id": BUSINESS_ID, "recipients": [SOURCE_BUSINESS_ID], "subject": "SUBJECT", "body": "BODY"}'
 ```
+Replace SUBJECT and BODY with the locale-appropriate values above (with MATERIALS substituted).
 End turn returning: `{"outcome": "rejected"}`. Do NOT proceed to Step 4.
 
 **If NEEDS_MORE_TIME:**
@@ -153,8 +169,8 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Human needs more time — resending approval request...\", \"agent\": \"order\", \"level\": \"waiting\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
-Resend the approval email (this creates a fresh HITL the user can reply to):
-Use the `send_email` skill with the same subject, same recipients, same body as the original approval email, and with `session_key` set to YOUR current session key. This gives the user a new email to reply to so the reply reaches this session correctly.
+Resend the approval email in the correct locale (this creates a fresh HITL the user can reply to):
+Use the `send_email` skill with `session_key` set to YOUR current session key, and compose subject and body in the language matching LOCALE (same templates as Step 2). This gives the user a new email to reply to so the reply reaches this session correctly.
 End turn returning: `{"outcome": "pending_approval_resent", "session_key": "YOUR_SESSION_KEY"}`. Do NOT proceed to Step 4.
 
 **If APPROVED (or auto-approved):**
@@ -181,12 +197,16 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Sending result notification to source business...\", \"agent\": \"order\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
-Send a notification email back to the source business:
+Send a notification email back to the source business. Use the subject and body for the correct locale:
+- `LOCALE=en`: subject `"Order Analysis Result"`, body `"Order analysis complete. Outcome: approved. Materials: MATERIALS."`
+- `LOCALE=zh`: subject `"订单分析结果"`, body `"订单分析完成。结果：已批准。物料：MATERIALS。"`
+
 ```
 exec curl -s -X POST http://auth-service:4000/send-email \
   -H 'Content-Type: application/json' \
-  -d '{"business_id": BUSINESS_ID, "recipients": [SOURCE_BUSINESS_ID], "subject": "Order Analysis Result", "body": "Order analysis complete. Outcome: approved. Materials: MATERIALS."}'
+  -d '{"business_id": BUSINESS_ID, "recipients": [SOURCE_BUSINESS_ID], "subject": "SUBJECT", "body": "BODY"}'
 ```
+Replace SUBJECT and BODY with the locale-appropriate values above (with MATERIALS substituted).
 
 If `_material_session_key` is present in the original task, publish a trace event then call back the material session so it can continue its workflow (spawn Planning Agent). Include the **full original event context** so the material session has everything needed to spawn planning:
 ```
@@ -221,6 +241,7 @@ Return this exact JSON as your final response (replacing placeholders with actua
 ---
 
 ## Rules
+- **Email language**: Use the `LOCALE` value retrieved in Step 0. Write all email subjects and bodies in that language: `zh` → Chinese, `en` (or absent/error) → English. Apply to every email: approval request, rejection notification, approval notification.
 - Always include `business_id` in all tool calls.
 - Invoke `order_engine` at most once.
 - Do not poll for job results — wait for the engine callback to resume this session.

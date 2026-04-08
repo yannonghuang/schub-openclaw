@@ -1,0 +1,34 @@
+{
+  "nav": {
+    "home": "首页",
+    "messaging": "消息",
+    "aiAgent": "智能助手",
+    "chat": "对话",
+    "threadManagement": "会话管理",
+    "audit": "审计",
+    "traceability": "溯源",
+    "agentDashboard": "助手看板",
+    "settings": "设置",
+    "users": "用户",
+    "transportation": "运输",
+    "playground": "测试台",
+    "logout": "退出登录",
+    "signIn": "登录"
+  },
+  "buttons": {
+    "save": "保存",
+    "cancel": "取消",
+    "confirm": "确认",
+    "delete": "删除",
+    "close": "关闭",
+    "send": "发送",
+    "start": "开始",
+    "open": "打开",
+    "loading": "加载中..."
+  },
+  "status": {
+    "loading": "加载中...",
+    "error": "出错了",
+    "noData": "暂无数据"
+  }
+}

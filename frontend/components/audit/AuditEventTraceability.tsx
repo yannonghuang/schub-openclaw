@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "next-i18next/pages";
 import { TraceWaterfall, TraceDTO } from "./TraceWaterfall";
 
 export function AuditEventTraceability({ traceId }: { traceId: string }) {
+  const { t } = useTranslation("audit");
   const [trace, setTrace] = useState<TraceDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,8 +26,8 @@ export function AuditEventTraceability({ traceId }: { traceId: string }) {
     return () => { cancelled = true; };
   }, [traceId]);
 
-  if (error) return <div style={{ color: "#ef4444", padding: 12 }}>{error}</div>;
-  if (!trace) return <div style={{ padding: 12, color: "#9ca3af" }}>Loading trace…</div>;
+  if (error) return <div style={{ color: "#ef4444", padding: 12 }}>{t("trace.error")}</div>;
+  if (!trace) return <div style={{ padding: 12, color: "#9ca3af" }}>{t("trace.loading")}</div>;
 
   return <TraceWaterfall trace={trace} />;
 }

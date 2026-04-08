@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { FilterBuilder, AuditFilters } from "./FilterBuilder";
-
 import { AuditEventTraceability } from "./AuditEventTraceability";
 import { useAuth } from "../../context/AuthContext";
 import { useRouter } from "next/router";
-
+import { useTranslation } from "next-i18next/pages";
 import DraggablePopup from "../BusinessNetwork/DraggablePopup";
 
 /* =======================
@@ -120,6 +119,7 @@ function AuditViewModeSelector({
   value: AuditViewMode;
   onChange: (v: AuditViewMode) => void;
 }) {
+  const { t } = useTranslation("audit");
   return (
     <div className="view-mode">
       <label>
@@ -128,7 +128,7 @@ function AuditViewModeSelector({
           checked={value === "received"}
           onChange={() => onChange("received")}
         />
-        Received
+        {t("search.received")}
       </label>
 
       <label>
@@ -137,7 +137,7 @@ function AuditViewModeSelector({
           checked={value === "sent"}
           onChange={() => onChange("sent")}
         />
-        Sent
+        {t("search.sent")}
       </label>
 
       <style jsx>{`
@@ -191,24 +191,25 @@ function AuditTable({
   loadMore?: () => void;
   loading?: boolean;
 }) {
+  const { t } = useTranslation("audit");
   return (
     <div className="audit-table-wrapper">
       <div className="flex gap-4 text-sm mb-2">
-        <Legend color="#cb0b0bff" label="Delivery delay" />
-        <Legend color="#f97316" label="Quantity decrease" />
-        <Legend color="#3b82f6" label="Others" />
+        <Legend color="#cb0b0bff" label={t("search.legend.delay")} />
+        <Legend color="#f97316" label={t("search.legend.quantity")} />
+        <Legend color="#3b82f6" label={t("search.legend.others")} />
       </div>
       <table className="audit-table">
         <thead>
           <tr>
             <th style={{ width: 48 }}></th> {/* color dot */}
-            <th style={{ minWidth: 160 }}>Time</th>
-            <th style={{ minWidth: 120 }}>Type</th>
-            <th style={{ minWidth: 120 }}>Message Id</th>
-            <th style={{ minWidth: 320 }}>Materials</th>
-            <th style={{ minWidth: 80 }}>Delay</th>
-            <th style={{ minWidth: 90 }}>Qty ↓ %</th>
-            <th style={{ minWidth: 180 }}>Source → Recipient</th>
+            <th style={{ minWidth: 160 }}>{t("search.table.time")}</th>
+            <th style={{ minWidth: 120 }}>{t("search.table.type")}</th>
+            <th style={{ minWidth: 120 }}>{t("search.table.messageId")}</th>
+            <th style={{ minWidth: 320 }}>{t("search.table.materials")}</th>
+            <th style={{ minWidth: 80 }}>{t("search.table.delay")}</th>
+            <th style={{ minWidth: 90 }}>{t("search.table.quantity")}</th>
+            <th style={{ minWidth: 180 }}>{t("search.table.sourceRecipient")}</th>
           </tr>
         </thead>
 
@@ -248,7 +249,7 @@ function AuditTable({
       {hasMore && loadMore && (
         <div className="load-more">
           <button disabled={loading} onClick={loadMore}>
-            {loading ? "Loading…" : "Load more"}
+            {loading ? t("search.loading") : t("search.loadMore")}
           </button>
         </div>
       )}
