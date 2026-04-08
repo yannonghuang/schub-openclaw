@@ -143,7 +143,13 @@ async def _publish_agui(business_id: int, event: dict) -> None:
 
 
 async def _persist_trace_span(business_id: str, payload: dict) -> None:
-    """Fire-and-forget: persist a schub/trace event as a span in the audit service."""
+    """Fire-and-forget: persist a schub/trace event as a span in the audit service.
+
+    Each span's duration is measured as the time between consecutive trace events:
+    - When a new event arrives, close the previous open span (PATCH ended_at = now)
+    - Create a new span with started_at = now, ended_at = None (open)
+    The last span is closed when RunFinished fires via _close_last_span().
+    """
     try:
         redis = await get_redis_client()
         trace_id = await redis.get(f"audit:trace:{business_id}")
@@ -167,23 +173,58 @@ async def _persist_trace_span(business_id: str, payload: dict) -> None:
         kind_map = {"major": "agent", "detail": "tool", "waiting": "email"}
         kind = kind_map.get(level, "agent")
         name = f"[{agent}] {step}" if agent else step
+        span_id = str(uuid.uuid4())
 
         async with httpx.AsyncClient(timeout=5) as client:
+            # Close the previous open span using this event's timestamp as its end time
+            prev_span_id = await redis.get(f"audit:last_span:{business_id}")
+            if prev_span_id:
+                if isinstance(prev_span_id, bytes):
+                    prev_span_id = prev_span_id.decode()
+                await client.patch(f"{AUDIT_URL}/spans/{prev_span_id}", json={
+                    "ended_at": started_at,
+                    "status": "ok",
+                })
+
+            # Create new open span (no ended_at yet — closed by next event or RunFinished)
             await client.post(f"{AUDIT_URL}/spans", json={
-                "id": str(uuid.uuid4()),
+                "id": span_id,
                 "trace_id": trace_id,
                 "parent_id": None,
                 "name": name,
                 "kind": kind,
                 "business_id": biz_id_int,
                 "started_at": started_at,
-                "ended_at": started_at,
                 "status": "ok",
                 "thread_id": trace_id,
                 "attributes": {"step": step, "agent": agent, "level": level},
             })
+
+        # Track this span as the latest open one
+        await redis.set(f"audit:last_span:{business_id}", span_id, ex=AGUI_EVENT_TTL)
     except Exception as e:
         print(f"[audit span] {e}")
+
+
+async def _close_last_span(business_id: int) -> None:
+    """Close the final open span when a run finishes."""
+    try:
+        redis = await get_redis_client()
+        key = f"audit:last_span:{business_id}"
+        span_id = await redis.get(key)
+        if not span_id:
+            return
+        if isinstance(span_id, bytes):
+            span_id = span_id.decode()
+        ended_at = datetime.fromtimestamp(time.time(), tz=timezone.utc).isoformat()
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.patch(f"{AUDIT_URL}/spans/{span_id}", json={
+                "ended_at": ended_at,
+                "status": "ok",
+            })
+        await redis.delete(key)
+    except Exception as e:
+        print(f"[audit close_span] {e}")
 
 
 def _inject_context(req: AgUIChatRequest) -> list:
@@ -292,6 +333,7 @@ async def _run_agui_chat(req: AgUIChatRequest, run_id: str) -> None:
         await _publish_agui(biz, {
             "type": "RunFinished", "runId": run_id, "threadId": req.thread_id,
         })
+        await _close_last_span(biz)
 
     except Exception as e:
         print(f"[/agui/chat] Error streaming from OpenClaw: {e}")
@@ -301,6 +343,7 @@ async def _run_agui_chat(req: AgUIChatRequest, run_id: str) -> None:
             "runId": run_id,
             "threadId": req.thread_id,
         })
+        await _close_last_span(biz)
 
 
 @router.post("/chat", status_code=202)

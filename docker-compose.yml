@@ -155,6 +155,10 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/schub
+      - PYTHONPATH=/app:/auth_service
+    volumes:
+      - ./services/audit:/app
+      - ./services/auth:/auth_service
     depends_on:
       - redis
       - db
