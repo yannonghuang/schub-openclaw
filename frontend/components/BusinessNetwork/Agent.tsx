@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { Resizable } from "re-resizable";
 import { useAGUIStream, type ChatMessage } from "../../hooks/useAGUIStream";
 import type { TraceEvent, ToolCallEndEvent, HITLReplyEvent } from "../../types/agui-events";
+import { AuditEventTraceability } from "../audit/AuditEventTraceability";
 
 /* ------------------------------------------------------------------ */
 /* Step event types                                                    */
@@ -27,8 +28,19 @@ function Tool_Spinner() {
   );
 }
 
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return "<1s";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `+${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem > 0 ? `+${m}m${rem}s` : `+${m}m`;
+}
+
 function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowActive: boolean }) {
   if (steps.length === 0 && !workflowActive) return null;
+
+  const t0 = steps[0]?.ts ?? 0;
 
   return (
     <div className={`rounded border px-3 py-2 text-xs space-y-1 ${workflowActive ? "border-blue-100 bg-blue-50 text-gray-600" : "border-gray-200 bg-gray-50 text-gray-500"}`}>
@@ -64,12 +76,19 @@ function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowAct
           ? isWaiting ? "text-blue-500 italic" : "text-blue-600 font-medium"
           : isDetail ? "text-gray-400" : "text-gray-600";
 
+        const elapsed = i > 0 && t0 > 0 && s.ts > 0 ? formatElapsed(s.ts - t0) : null;
+
         return (
           <div key={i} className={`flex items-center gap-2 ${isDetail ? "pl-3" : ""}`}>
             {indicator}
-            <span className={`${isDetail ? "text-[11px]" : "text-xs"} ${labelClass}`}>
+            <span className={`${isDetail ? "text-[11px]" : "text-xs"} ${labelClass} flex-1 min-w-0`}>
               {s.agent ? `[${s.agent}] ` : ""}{s.label}
             </span>
+            {elapsed && (
+              <span className="text-[10px] text-gray-300 flex-shrink-0 tabular-nums font-mono">
+                {elapsed}
+              </span>
+            )}
           </div>
         );
       })}
@@ -118,6 +137,7 @@ export default function Agent({
   const [traceSteps, setTraceSteps] = useState<StepEvent[]>([]);
   const [workflowActive, setWorkflowActive] = useState(false);
   const workflowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showTimeline, setShowTimeline] = useState(false);
 
   /* ------------------------------------------------------------------ */
   /* AG-UI SSE stream — single channel for all events                   */
@@ -369,6 +389,22 @@ export default function Agent({
       </Resizable>
 
       <StepsTrace steps={traceSteps.length > 0 ? traceSteps : steps} workflowActive={workflowActive || isLoading} />
+
+      {!workflowActive && !isLoading && traceSteps.length > 0 && resolvedThreadId && (
+        <div className="mt-1">
+          <button
+            onClick={() => setShowTimeline(s => !s)}
+            className="text-[11px] text-blue-500 hover:text-blue-700 hover:underline"
+          >
+            {showTimeline ? "Hide timeline" : "View timeline →"}
+          </button>
+          {showTimeline && (
+            <div className="mt-2 border rounded bg-white overflow-auto max-h-64">
+              <AuditEventTraceability traceId={resolvedThreadId} />
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex gap-2 mt-2">
         <input

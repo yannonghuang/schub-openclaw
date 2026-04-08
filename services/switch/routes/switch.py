@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from data.schemas import Message
 from utils.redis import publish_message, get_redis_client, get_events_since
+from datetime import datetime, timezone
 import json
 import asyncio
 import time
@@ -15,6 +16,7 @@ EMAIL_NODE     = os.getenv("EMAIL_NODE", "-2")
 AGUI_EVENT_TTL = int(os.getenv("AGUI_EVENT_TTL", "3600"))  # 1 hour
 OPENCLAW_URL   = os.getenv("OPENCLAW_URL", "http://openclaw:18789")
 OPENCLAW_TOKEN = os.getenv("OPENCLAW_TOKEN", "")
+AUDIT_URL      = os.getenv("AUDIT_URL", "http://audit-service:9000")
 
 PING_TIMEOUT = 30  # seconds
 REDIS_POLL_INTERVAL = 1.0
@@ -96,6 +98,11 @@ async def agui_sse(
                     if biz is not None and str(biz) != business_id:
                         continue
 
+                    # Inject server-side timestamp into schub/trace events and persist as spans
+                    if payload.get("type") == "CustomEvent" and payload.get("name") == "schub/trace":
+                        payload.setdefault("timestamp", int(time.time() * 1000))
+                        asyncio.create_task(_persist_trace_span(business_id, payload))
+
                     # Assign monotonic sequence ID
                     seq = await redis_client.incr(f"agui:seq:{business_id}")
                     encoded = json.dumps(payload)
@@ -135,6 +142,50 @@ async def _publish_agui(business_id: int, event: dict) -> None:
     await publish_message(channel, {"from": "-1", "text": json.dumps(event)})
 
 
+async def _persist_trace_span(business_id: str, payload: dict) -> None:
+    """Fire-and-forget: persist a schub/trace event as a span in the audit service."""
+    try:
+        redis = await get_redis_client()
+        trace_id = await redis.get(f"audit:trace:{business_id}")
+        if not trace_id:
+            return
+        if isinstance(trace_id, bytes):
+            trace_id = trace_id.decode()
+
+        value = payload.get("value", {})
+        step = value.get("step", "")
+        agent = value.get("agent", "")
+        level = value.get("level", "major")
+        ts_ms = payload.get("timestamp", int(time.time() * 1000))
+        started_at = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
+
+        try:
+            biz_id_int = int(business_id)
+        except (ValueError, TypeError):
+            biz_id_int = value.get("businessId", 0)
+
+        kind_map = {"major": "agent", "detail": "tool", "waiting": "email"}
+        kind = kind_map.get(level, "agent")
+        name = f"[{agent}] {step}" if agent else step
+
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(f"{AUDIT_URL}/spans", json={
+                "id": str(uuid.uuid4()),
+                "trace_id": trace_id,
+                "parent_id": None,
+                "name": name,
+                "kind": kind,
+                "business_id": biz_id_int,
+                "started_at": started_at,
+                "ended_at": started_at,
+                "status": "ok",
+                "thread_id": trace_id,
+                "attributes": {"step": step, "agent": agent, "level": level},
+            })
+    except Exception as e:
+        print(f"[audit span] {e}")
+
+
 def _inject_context(req: AgUIChatRequest) -> list:
     """Prepend a system message with business context so the agent always knows who it's talking to."""
     system_msg = {
@@ -153,6 +204,9 @@ async def _run_agui_chat(req: AgUIChatRequest, run_id: str) -> None:
     await _publish_agui(biz, {
         "type": "RunStarted", "runId": run_id, "threadId": req.thread_id,
     })
+    # Store current trace context so schub/trace events can be persisted as spans
+    redis = await get_redis_client()
+    await redis.set(f"audit:trace:{biz}", req.thread_id, ex=AGUI_EVENT_TTL)
 
     message_id = str(uuid.uuid4())
     message_started = False
