@@ -26,9 +26,15 @@ Do not invent values. Omit fields that cannot be inferred.
 
 ## Phase 2 — Execution Flow
 
-### Step 0 — Discover session key
+### Step 0 — Discover session key and locale
 
 Before calling any engine, discover your own session key so the engine can call you back when complete.
+
+Also look up the business locale (for email language) immediately after discovering the session key:
+```
+exec sh -c 'curl -s http://switch-service:6000/locale/BUSINESS_ID | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"locale\",\"en\"))"'
+```
+Replace BUSINESS_ID with the actual business_id from the system context. Store this value as `LOCALE` — use it in every email subject and body below.
 
 Run this exact command (outputs only the UUID, nothing else):
 ```
@@ -221,7 +227,7 @@ Return this exact JSON as your final response (replacing placeholders with actua
 ---
 
 ## Rules
-- **Email language**: The system context includes a `locale` field. Write all email subjects and bodies in the matching language: `locale=zh` → Chinese, `locale=en` (or absent) → English. Apply this to every email you send (approval request, rejection notification, approval notification).
+- **Email language**: Use the `LOCALE` value retrieved in Step 0. Write all email subjects and bodies in that language: `zh` → Chinese, `en` (or absent/error) → English. Apply to every email: approval request, rejection notification, approval notification.
 - Always include `business_id` in all tool calls.
 - Invoke `order_engine` at most once.
 - Do not poll for job results — wait for the engine callback to resume this session.

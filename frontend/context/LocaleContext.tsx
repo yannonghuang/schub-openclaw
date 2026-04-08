@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/router";
+import { useAuth } from "./AuthContext";
 
 type Locale = "en" | "zh";
 
@@ -15,11 +16,25 @@ const LocaleContext = createContext<LocaleContextValue>({
   setLocale: () => {},
 });
 
+async function persistLocaleToAgent(businessId: number | null | undefined, locale: string) {
+  if (!businessId) return;
+  try {
+    await fetch("/agui/locale", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ business_id: businessId, locale }),
+    });
+  } catch {
+    // non-fatal — agent falls back to "en"
+  }
+}
+
 export function LocaleProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const { user } = useAuth();
   const [locale, setLocaleState] = useState<Locale>("en");
 
-  // On mount, read persisted preference
+  // On mount, read persisted preference and push to agent context
   useEffect(() => {
     const saved = localStorage.getItem("schub_locale") as Locale | null;
     if (saved && (saved === "en" || saved === "zh")) {
@@ -29,6 +44,11 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
       }
     }
   }, []);
+
+  // Whenever the user or locale changes, sync to Redis via switch-service
+  useEffect(() => {
+    persistLocaleToAgent(user?.business?.id, locale);
+  }, [locale, user?.business?.id]);
 
   const setLocale = useCallback((l: Locale) => {
     setLocaleState(l);
