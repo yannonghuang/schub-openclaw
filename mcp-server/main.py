@@ -7,8 +7,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
+from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
 import job_store
@@ -33,27 +32,45 @@ _TRUSTED_NETS = ("127.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.",
                   "172.27.", "172.28.", "172.29.", "172.30.", "172.31.", "10.", "192.168.")
 
 
-class APIKeyMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        # CORS preflight and health check are exempt — OPTIONS carries no credentials
-        # by design, and the follow-up POST will still be key-checked.
-        if request.method == "OPTIONS" or request.url.path == "/health":
-            return await call_next(request)
+class APIKeyMiddleware:
+    """Pure ASGI middleware — avoids BaseHTTPMiddleware which buffers responses
+    and breaks SSE/streaming endpoints."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+
+        path      = scope.get("path", "")
+        method    = scope.get("method", "")
+        client    = scope.get("client")
+        client_ip = client[0] if client else ""
+        headers   = Headers(scope=scope)
+
+        # CORS preflight and health check are exempt
+        if method == "OPTIONS" or path == "/health":
+            await self.app(scope, receive, send)
+            return
 
         expected = os.environ.get("MCP_API_KEY")
         if not expected:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        # Requests from localhost / internal Docker / RFC-1918 ranges skip the key check.
-        # This allows MCP Inspector (or any dev tool) running on the same host to
-        # connect without a header, while external traffic still requires the key.
-        client_ip = request.client.host if request.client else ""
+        # Requests from localhost / internal Docker / RFC-1918 ranges skip key check
         if any(client_ip.startswith(prefix) for prefix in _TRUSTED_NETS):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        if request.headers.get("X-MCP-API-Key") != expected:
-            return JSONResponse({"detail": "Forbidden"}, status_code=403)
-        return await call_next(request)
+        if headers.get("X-MCP-API-Key") != expected:
+            response = JSONResponse({"detail": "Forbidden"}, status_code=403)
+            await response(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)
 
 
 # ---------------------------
