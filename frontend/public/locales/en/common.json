@@ -1,0 +1,34 @@
+{
+  "nav": {
+    "home": "Home",
+    "messaging": "Messaging",
+    "aiAgent": "AI Agent",
+    "chat": "Chat",
+    "threadManagement": "Thread Management",
+    "audit": "Audit",
+    "traceability": "Traceability",
+    "agentDashboard": "Agent Dashboard",
+    "settings": "Settings",
+    "users": "Users",
+    "transportation": "Transportation",
+    "playground": "Playground",
+    "logout": "Logout",
+    "signIn": "Sign In"
+  },
+  "buttons": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "delete": "Delete",
+    "close": "Close",
+    "send": "Send",
+    "start": "Start",
+    "open": "Open",
+    "loading": "Loading..."
+  },
+  "status": {
+    "loading": "Loading...",
+    "error": "Something went wrong",
+    "noData": "No data"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "search": {
+    "received": "Received",
+    "sent": "Sent",
+    "loadMore": "Load more",
+    "loading": "Loading…",
+    "legend": {
+      "delay": "Delivery delay",
+      "quantity": "Quantity decrease",
+      "others": "Others"
+    },
+    "table": {
+      "time": "Time",
+      "type": "Type",
+      "messageId": "Message Id",
+      "materials": "Materials",
+      "delay": "Delay",
+      "quantity": "Qty ↓ %",
+      "sourceRecipient": "Source → Recipient"
+    }
+  },
+  "trace": {
+    "title": "Traceability",
+    "loading": "Loading trace…",
+    "error": "Failed to load trace",
+    "spans": "{{count}} span",
+    "spans_plural": "{{count}} spans",
+    "total": "total"
+  }
+}

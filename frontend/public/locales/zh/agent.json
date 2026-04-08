@@ -1,0 +1,32 @@
+{
+  "panel": {
+    "title": "智能助手",
+    "newChat": "+ 新对话",
+    "history": "历史记录",
+    "noConversations": "暂无活跃对话",
+    "startPrompt": "点击「+ 新对话」开始",
+    "askAnything": "向助手提问：",
+    "previousConversations": "历史对话",
+    "noHistory": "暂无历史记录。",
+    "chatBadge": "对话",
+    "inboxBadge": "收件箱",
+    "typeMessage": "输入您的问题...",
+    "quickActions": [
+      "查询我的订单状态",
+      "检查物料库存水平",
+      "规划下周生产计划",
+      "查看在制品队列状态"
+    ]
+  },
+  "run": {
+    "title": "助手运行",
+    "working": "助手处理中...",
+    "workflowRunning": "工作流运行中...",
+    "stepsCompleted": "已完成 {{count}} 个步骤",
+    "stepsCompleted_plural": "已完成 {{count}} 个步骤",
+    "viewTimeline": "查看时间轴 →",
+    "hideTimeline": "隐藏时间轴",
+    "typeMessage": "输入消息...",
+    "loadingThread": "加载会话中..."
+  }
+}

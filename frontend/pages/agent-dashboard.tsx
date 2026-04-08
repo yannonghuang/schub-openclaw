@@ -6,6 +6,11 @@ import { LiveFeed } from "../components/audit/LiveFeed"
 import { ChannelDistributionChart } from "../components/audit/ChannelDistributionChart"
 import { TemporalDistributionChart } from "../components/audit/TemporalDistributionChart";
 import AgentAnalyticsDashboard from "../components/audit/AgentAnalyticsDashboard";
+import { serverSideTranslations } from "next-i18next/pages/serverSideTranslations";
+
+export async function getStaticProps({ locale }: { locale: string }) {
+  return { props: { ...(await serverSideTranslations(locale, ["common", "agent", "audit"])) } };
+}
 
 // --- Page ---
 export default function EventsDashboard() {

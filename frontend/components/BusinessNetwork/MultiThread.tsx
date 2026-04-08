@@ -5,13 +5,8 @@ import Agent from "./Agent";
 import { useAgentPanel } from "../../context/AgentPanelContext";
 import { useThreadHistory } from "../../hooks/useThreadHistory";
 import { useAuth } from "../../context/AuthContext";
+import { useTranslation } from "next-i18next/pages";
 
-const QUICK_ACTIONS = [
-  "What is the status of my open orders?",
-  "Check material supply levels",
-  "Plan production for next week",
-  "WIP queue status",
-];
 
 export default function MultiThread() {
   const {
@@ -22,6 +17,8 @@ export default function MultiThread() {
 
   const { user } = useAuth();
   const businessId = user?.business?.id ?? null;
+  const { t } = useTranslation("agent");
+  const quickActions: string[] = t("panel.quickActions", { returnObjects: true }) as string[];
 
   const [showNewChat, setShowNewChat] = useState(false);
   const [newChatInput, setNewChatInput] = useState("");
@@ -100,18 +97,18 @@ export default function MultiThread() {
         {/* Header */}
         <div className="flex justify-between items-center px-4 py-3 bg-gray-50 border-b flex-shrink-0">
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-sm text-gray-700">Agent</span>
+            <span className="font-semibold text-sm text-gray-700">{t("panel.title")}</span>
             <button
               onClick={() => { setShowNewChat(s => !s); setShowHistory(false); }}
               className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
             >
-              + New Chat
+              {t("panel.newChat")}
             </button>
             <button
               onClick={handleOpenHistory}
               className="px-2 py-1 text-xs bg-gray-200 text-gray-600 rounded hover:bg-gray-300"
             >
-              History
+              {t("panel.history")}
             </button>
           </div>
           <button onClick={close} className="text-gray-400 hover:text-gray-700 text-lg leading-none">✕</button>
@@ -120,9 +117,9 @@ export default function MultiThread() {
         {/* New Chat Form */}
         {showNewChat && (
           <div className="border-b px-4 py-3 bg-blue-50 flex-shrink-0 space-y-2">
-            <p className="text-xs text-gray-500">Ask the agent anything:</p>
+            <p className="text-xs text-gray-500">{t("panel.askAnything")}</p>
             <div className="flex gap-1 flex-wrap">
-              {QUICK_ACTIONS.map(q => (
+              {quickActions.map(q => (
                 <button
                   key={q}
                   onClick={() => setNewChatInput(q)}
@@ -136,7 +133,7 @@ export default function MultiThread() {
               <input
                 autoFocus
                 className="flex-1 border rounded px-2 py-1 text-sm"
-                placeholder="Type your question..."
+                placeholder={t("panel.typeMessage")}
                 value={newChatInput}
                 onChange={e => setNewChatInput(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && startNewChat()}
@@ -146,7 +143,7 @@ export default function MultiThread() {
                 disabled={!newChatInput.trim()}
                 className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40"
               >
-                Start
+                {t("panel.start", { ns: "common", defaultValue: "Start" })}
               </button>
             </div>
           </div>
@@ -155,27 +152,27 @@ export default function MultiThread() {
         {/* History Panel */}
         {showHistory && (
           <div className="border-b px-4 py-3 bg-gray-50 flex-shrink-0 overflow-y-auto max-h-56">
-            <p className="text-xs font-medium text-gray-500 mb-2">Previous conversations</p>
-            {histLoading && <p className="text-xs text-gray-400">Loading...</p>}
+            <p className="text-xs font-medium text-gray-500 mb-2">{t("panel.previousConversations")}</p>
+            {histLoading && <p className="text-xs text-gray-400">{t("status.loading", { ns: "common" })}</p>}
             {!histLoading && history.length === 0 && (
-              <p className="text-xs text-gray-400">No previous threads.</p>
+              <p className="text-xs text-gray-400">{t("panel.noHistory")}</p>
             )}
-            {history.map(t => (
-              <div key={t.id} className="flex items-center justify-between py-1.5 border-b last:border-0">
+            {history.map(thread => (
+              <div key={thread.id} className="flex items-center justify-between py-1.5 border-b last:border-0">
                 <div className="flex-1 min-w-0 mr-2">
                   <div className="flex items-center gap-1">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${t.thread_source === "user" ? "bg-blue-100 text-blue-600" : "bg-amber-100 text-amber-600"}`}>
-                      {t.thread_source === "user" ? "Chat" : "Inbox"}
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${thread.thread_source === "user" ? "bg-blue-100 text-blue-600" : "bg-amber-100 text-amber-600"}`}>
+                      {thread.thread_source === "user" ? t("panel.chatBadge") : t("panel.inboxBadge")}
                     </span>
-                    <span className="text-xs text-gray-700 truncate">{t.title || t.external_thread_id}</span>
+                    <span className="text-xs text-gray-700 truncate">{thread.title || thread.external_thread_id}</span>
                   </div>
-                  <span className="text-[10px] text-gray-400 ml-1">{t.message_count} msg · {new Date(t.created_at).toLocaleDateString()}</span>
+                  <span className="text-[10px] text-gray-400 ml-1">{thread.message_count} msg · {new Date(thread.created_at).toLocaleDateString()}</span>
                 </div>
                 <button
-                  onClick={() => handleReopenThread(t)}
+                  onClick={() => handleReopenThread(thread)}
                   className="text-xs px-2 py-0.5 bg-white border rounded hover:bg-gray-100 flex-shrink-0"
                 >
-                  Open
+                  {t("buttons.open", { ns: "common" })}
                 </button>
               </div>
             ))}
@@ -186,23 +183,23 @@ export default function MultiThread() {
         <div className="flex border-b px-2 pt-1 bg-gray-50 overflow-x-auto flex-shrink-0 gap-1">
           {threads.length === 0 && !showNewChat && (
             <div className="text-xs text-gray-400 py-2 px-1">
-              Click <strong>+ New Chat</strong> to start
+              {t("panel.startPrompt")}
             </div>
           )}
-          {threads.map(t => (
+          {threads.map(tab => (
             <div
-              key={t.threadKey}
+              key={tab.threadKey}
               className={`flex items-center gap-1 px-3 py-1.5 rounded-t cursor-pointer whitespace-nowrap text-xs border-b-2 transition-colors
-                ${t.threadKey === activeKey
+                ${tab.threadKey === activeKey
                   ? "border-blue-500 bg-white text-gray-800 font-medium"
                   : "border-transparent text-gray-500 hover:bg-gray-100"
                 }`}
-              onClick={() => { setActiveKey(t.threadKey); setShowNewChat(false); setShowHistory(false); }}
+              onClick={() => { setActiveKey(tab.threadKey); setShowNewChat(false); setShowHistory(false); }}
             >
-              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${t.source === "user" ? "bg-blue-400" : "bg-amber-400"}`} />
-              <span className="max-w-[130px] truncate">{t.title}</span>
+              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${tab.source === "user" ? "bg-blue-400" : "bg-amber-400"}`} />
+              <span className="max-w-[130px] truncate">{tab.title}</span>
               <button
-                onClick={e => { e.stopPropagation(); closeThread(t.threadKey); }}
+                onClick={e => { e.stopPropagation(); closeThread(tab.threadKey); }}
                 className="text-gray-300 hover:text-red-500 ml-0.5"
               >
                 ✕
@@ -218,28 +215,28 @@ export default function MultiThread() {
               <svg xmlns="http://www.w3.org/2000/svg" className="w-10 h-10 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
               </svg>
-              <p className="text-sm">No active conversations</p>
+              <p className="text-sm">{t("panel.noConversations")}</p>
               <button
                 onClick={() => setShowNewChat(true)}
                 className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
               >
-                + New Chat
+                {t("panel.newChat")}
               </button>
             </div>
           )}
-          {threads.map(t => (
+          {threads.map(tab => (
             <div
-              key={t.threadKey}
+              key={tab.threadKey}
               className="h-full overflow-auto"
-              style={{ display: t.threadKey === activeKey ? "block" : "none" }}
+              style={{ display: tab.threadKey === activeKey ? "block" : "none" }}
             >
               <Agent
                 apiUrl="https://localhost/langgraph-api"
-                businessId={t.businessId}
-                initialMessage={t.initialMessage}
-                threadId={t.threadKey}
-                source={t.source}
-                title={t.title}
+                businessId={tab.businessId}
+                initialMessage={tab.initialMessage}
+                threadId={tab.threadKey}
+                source={tab.source}
+                title={tab.title}
               />
             </div>
           ))}

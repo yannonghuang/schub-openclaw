@@ -5,13 +5,19 @@ import toast from "react-hot-toast";
 import { useState } from "react";
 import AuthLayout from "../components/AuthLayout";
 import { EnvelopeIcon, LockClosedIcon } from "@heroicons/react/24/outline";
-
 import Link from "next/link";
+import { useTranslation } from "next-i18next/pages";
+import { serverSideTranslations } from "next-i18next/pages/serverSideTranslations";
+
+export async function getStaticProps({ locale }: { locale: string }) {
+  return { props: { ...(await serverSideTranslations(locale, ["common", "auth"])) } };
+}
 
 export default function SignInPage() {
   const { signIn, user } = useAuth();
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const { t } = useTranslation("auth");
 
   const {
     register,
@@ -36,7 +42,7 @@ export default function SignInPage() {
   return (
     <AuthLayout>
       <h2 style={{ textAlign: "center", fontSize: "1.5rem", fontWeight: "700", marginBottom: "1rem" }}>
-        Sign In
+        {t("signIn.title")}
       </h2>
       <form onSubmit={handleSubmit(onSubmit)} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
         {/* Email */}
@@ -46,12 +52,12 @@ export default function SignInPage() {
           </span>
           <input
             type="email"
-            placeholder="you@example.com"
+            placeholder={t("signIn.emailPlaceholder")}
             {...register("email", { required: true })}
             className={errors.email ? "error" : ""}
             autoComplete="email"
           />
-          {errors.email && <p className="error-text">Email is required</p>}
+          {errors.email && <p className="error-text">{t("signIn.emailRequired")}</p>}
         </div>
 
         {/* Password */}
@@ -66,23 +72,23 @@ export default function SignInPage() {
             className={errors.password ? "error" : ""}
             autoComplete="current-password"
           />
-          {errors.password && <p className="error-text">Password is required</p>}
+          {errors.password && <p className="error-text">{t("signIn.passwordRequired")}</p>}
         </div>
 
         <button type="submit" disabled={loading}>
-          {loading ? "Signing in..." : "Sign In"}
+          {loading ? t("signIn.signingIn") : t("signIn.title")}
         </button>
 
         <p style={{ fontSize: "0.875rem", textAlign: "center" }}>
-          Don’t have an account?{" "}
+          {t("signIn.noAccount")}{" "}
           <Link href="/signup" style={{ color: "#2563eb", textDecoration: "underline" }}>
-            Sign Up
+            {t("signIn.signUp")}
           </Link>
         </p>
         <p style={{ fontSize: "0.875rem", textAlign: "center" }}>
-          Forgot your password?{" "}
+          {t("signIn.forgotPassword")}{" "}
           <Link href="/forgot-password" style={{ color: "#2563eb", textDecoration: "underline" }}>
-            Reset it
+            {t("signIn.resetPassword")}
           </Link>
         </p>
       </form>

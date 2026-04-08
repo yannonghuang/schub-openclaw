@@ -1,0 +1,32 @@
+{
+  "panel": {
+    "title": "Agent",
+    "newChat": "+ New Chat",
+    "history": "History",
+    "noConversations": "No active conversations",
+    "startPrompt": "Click + New Chat to start",
+    "askAnything": "Ask the agent anything:",
+    "previousConversations": "Previous conversations",
+    "noHistory": "No previous threads.",
+    "chatBadge": "Chat",
+    "inboxBadge": "Inbox",
+    "typeMessage": "Type your question...",
+    "quickActions": [
+      "What is the status of my open orders?",
+      "Check material supply levels",
+      "Plan production for next week",
+      "WIP queue status"
+    ]
+  },
+  "run": {
+    "title": "Agent Run",
+    "working": "Agent is working...",
+    "workflowRunning": "Workflow running...",
+    "stepsCompleted": "{{count}} step completed",
+    "stepsCompleted_plural": "{{count}} steps completed",
+    "viewTimeline": "View timeline →",
+    "hideTimeline": "Hide timeline",
+    "typeMessage": "Type a message...",
+    "loadingThread": "Loading thread..."
+  }
+}
