@@ -124,7 +124,13 @@ exec curl -s -X POST http://switch-service:6000/publish \
 
 ### Step 3 — Handle approval (on resume or auto-approve)
 
-**First: classify the reply intent** (skip this if auto-approved from Step 2 low-impact path):
+**First: look up the locale** (always — this session turn may be a fresh resume where Step 0 was not run):
+```
+exec sh -c 'curl -s http://switch-service:6000/locale/BUSINESS_ID | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"locale\",\"en\"))"'
+```
+Store the output as `LOCALE`. Use it for all email subjects and bodies below.
+
+**Then: classify the reply intent** (skip classification if auto-approved from Step 2 low-impact path):
 
 Read the reply text from the incoming message and determine the human's intent:
 - **APPROVED** — the human is giving a clear go-ahead to proceed with the order
