@@ -176,6 +176,7 @@ services:
       - OPENAI_SERVICE_URL=http://openai-service:4020
       - SYSTEM_NODE=-1
       - EMAIL_NODE=-2
+      - ALLOCATOR_BACKEND_URL=http://allocator-backend:8000
       #- NEXT_PUBLIC_FRONTEND_URL=https://localhost
       #- NEXT_PUBLIC_FRONTEND_URL=https://192.168.86.175
     # No host port needed — nginx proxies to this service internally

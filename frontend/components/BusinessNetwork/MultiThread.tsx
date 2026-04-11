@@ -6,6 +6,7 @@ import { useAgentPanel } from "../../context/AgentPanelContext";
 import { useThreadHistory } from "../../hooks/useThreadHistory";
 import { useAuth } from "../../context/AuthContext";
 import { useTranslation } from "next-i18next/pages";
+import { SuggestionItem, type Suggestion } from "./SuggestionItem";
 
 
 export default function MultiThread() {
@@ -23,6 +24,59 @@ export default function MultiThread() {
   const [showNewChat, setShowNewChat] = useState(false);
   const [newChatInput, setNewChatInput] = useState("");
   const [showHistory, setShowHistory] = useState(false);
+
+  // /material typeahead for the New Chat input
+  const [newChatSuggestions, setNewChatSuggestions] = useState<Suggestion[]>([]);
+  const [showNewChatSuggestions, setShowNewChatSuggestions] = useState(false);
+  const [newChatSuggestionIndex, setNewChatSuggestionIndex] = useState(-1);
+  const newChatSuggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const newChatSuggestionListRef = useRef<HTMLUListElement>(null);
+
+  const NC_SLASH_COMMANDS: Record<string, string> = {
+    material: "/api/allocator/products",
+    supply:   "/api/allocator/supplies",
+  };
+  const NC_COMMAND_PATTERN = new RegExp(`\\/(${Object.keys(NC_SLASH_COMMANDS).join("|")})(\\w*)`);
+
+  useEffect(() => {
+    if (newChatSuggestionIndex >= 0 && newChatSuggestionListRef.current) {
+      const item = newChatSuggestionListRef.current.children[newChatSuggestionIndex] as HTMLElement | undefined;
+      item?.scrollIntoView({ block: "nearest" });
+    }
+  }, [newChatSuggestionIndex]);
+
+  const handleNewChatInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setNewChatInput(val);
+    setNewChatSuggestionIndex(-1);
+    const match = val.match(NC_COMMAND_PATTERN);
+    if (match) {
+      const apiUrl = NC_SLASH_COMMANDS[match[1]];
+      const prefix = match[2];
+      if (newChatSuggestTimer.current) clearTimeout(newChatSuggestTimer.current);
+      newChatSuggestTimer.current = setTimeout(async () => {
+        try {
+          const res = await fetch(`${apiUrl}?q=${encodeURIComponent(prefix)}`);
+          if (res.ok) {
+            setNewChatSuggestions(await res.json());
+            setShowNewChatSuggestions(true);
+          }
+        } catch {
+          // allocator backend unavailable — fail silently
+        }
+      }, 200);
+    } else {
+      setShowNewChatSuggestions(false);
+      setNewChatSuggestions([]);
+    }
+  }, []);
+
+  const selectNewChatSuggestion = useCallback((id: string) => {
+    setNewChatInput((prev) => prev.replace(NC_COMMAND_PATTERN, id));
+    setShowNewChatSuggestions(false);
+    setNewChatSuggestions([]);
+    setNewChatSuggestionIndex(-1);
+  }, []);
   const { threads: history, loading: histLoading, reload: reloadHistory } = useThreadHistory(businessId);
 
   const MIN_WIDTH = 320;
@@ -129,22 +183,40 @@ export default function MultiThread() {
                 </button>
               ))}
             </div>
-            <div className="flex gap-2">
-              <input
-                autoFocus
-                className="flex-1 border rounded px-2 py-1 text-sm"
-                placeholder={t("panel.typeMessage")}
-                value={newChatInput}
-                onChange={e => setNewChatInput(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && startNewChat()}
-              />
-              <button
-                onClick={startNewChat}
-                disabled={!newChatInput.trim()}
-                className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40"
-              >
-                {t("panel.start", { ns: "common", defaultValue: "Start" })}
-              </button>
+            <div className="relative">
+              {showNewChatSuggestions && newChatSuggestions.length > 0 && (
+                <ul ref={newChatSuggestionListRef} className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded shadow-lg max-h-48 overflow-y-auto z-50">
+                  {newChatSuggestions.map((s, i) => (
+                    <SuggestionItem key={s.id} s={s} active={i === newChatSuggestionIndex} onSelect={selectNewChatSuggestion} />
+                  ))}
+                </ul>
+              )}
+              <div className="flex gap-2">
+                <input
+                  autoFocus
+                  autoComplete="off"
+                  className="flex-1 border rounded px-2 py-1 text-sm"
+                  placeholder={t("panel.typeMessage")}
+                  value={newChatInput}
+                  onChange={handleNewChatInputChange}
+                  onKeyDown={(e) => {
+                    if (showNewChatSuggestions && newChatSuggestions.length > 0) {
+                      if (e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); setNewChatSuggestionIndex(i => Math.min(i + 1, newChatSuggestions.length - 1)); return; }
+                      if (e.key === "ArrowUp")   { e.preventDefault(); e.stopPropagation(); setNewChatSuggestionIndex(i => Math.max(i - 1, -1)); return; }
+                      if (e.key === "Enter" && newChatSuggestionIndex >= 0) { e.preventDefault(); selectNewChatSuggestion(newChatSuggestions[newChatSuggestionIndex].productId); return; }
+                    }
+                    if (e.key === "Escape") { setShowNewChatSuggestions(false); setNewChatSuggestionIndex(-1); return; }
+                    if (e.key === "Enter" && !showNewChatSuggestions) startNewChat();
+                  }}
+                />
+                <button
+                  onClick={startNewChat}
+                  disabled={!newChatInput.trim()}
+                  className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40"
+                >
+                  {t("panel.start", { ns: "common", defaultValue: "Start" })}
+                </button>
+              </div>
             </div>
           </div>
         )}

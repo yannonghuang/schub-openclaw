@@ -7,6 +7,7 @@ import { useTranslation } from "next-i18next/pages";
 import { useAGUIStream, type ChatMessage } from "../../hooks/useAGUIStream";
 import type { TraceEvent, ToolCallEndEvent, HITLReplyEvent } from "../../types/agui-events";
 import { AuditEventTraceability } from "../audit/AuditEventTraceability";
+import { SuggestionItem, type Suggestion } from "./SuggestionItem";
 
 /* ------------------------------------------------------------------ */
 /* Step event types                                                    */
@@ -203,6 +204,7 @@ export default function Agent({
   const [traceSteps, setTraceSteps] = useState<StepEvent[]>([]);
   const [workflowActive, setWorkflowActive] = useState(false);
   const workflowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   // Auto-open timeline for reopened threads (no initialMessage = history view)
   const [showTimeline, setShowTimeline] = useState(!initialMessage?.trim());
   const [msgHeight, setMsgHeight] = useState(300);
@@ -400,6 +402,61 @@ export default function Agent({
   /* ------------------------------------------------------------------ */
   const [userInput, setUserInput] = useState("");
 
+  /* ------------------------------------------------------------------ */
+  /* /material typeahead                                                 */
+  /* ------------------------------------------------------------------ */
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestionIndex, setSuggestionIndex] = useState(-1);
+  const suggestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suggestionListRef = useRef<HTMLUListElement>(null);
+
+  useEffect(() => {
+    if (suggestionIndex >= 0 && suggestionListRef.current) {
+      const item = suggestionListRef.current.children[suggestionIndex] as HTMLElement | undefined;
+      item?.scrollIntoView({ block: "nearest" });
+    }
+  }, [suggestionIndex]);
+
+  const SLASH_COMMANDS: Record<string, string> = {
+    material: "/api/allocator/products",
+    supply:   "/api/allocator/supplies",
+  };
+  const COMMAND_PATTERN = new RegExp(`\\/(${Object.keys(SLASH_COMMANDS).join("|")})(\\w*)`);
+
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setUserInput(val);
+    setSuggestionIndex(-1);
+    const match = val.match(COMMAND_PATTERN);
+    if (match) {
+      const apiUrl = SLASH_COMMANDS[match[1]];
+      const prefix = match[2];
+      if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
+      suggestTimerRef.current = setTimeout(async () => {
+        try {
+          const res = await fetch(`${apiUrl}?q=${encodeURIComponent(prefix)}`);
+          if (res.ok) {
+            setSuggestions(await res.json());
+            setShowSuggestions(true);
+          }
+        } catch {
+          // allocator backend may be unavailable — fail silently
+        }
+      }, 200);
+    } else {
+      setShowSuggestions(false);
+      setSuggestions([]);
+    }
+  }, []);
+
+  const selectSuggestion = useCallback((id: string) => {
+    setUserInput((prev) => prev.replace(COMMAND_PATTERN, id));
+    setShowSuggestions(false);
+    setSuggestions([]);
+    setSuggestionIndex(-1);
+  }, []);
+
   const sendMessage = async () => {
     if (!userInput.trim() || !resolvedThreadId || isLoading) return;
     const text = userInput;
@@ -459,22 +516,49 @@ export default function Agent({
         </div>
       )}
 
-      <div className="flex gap-2 mt-2">
-        <input
-          disabled={isLoading}
-          className="flex-1 border rounded px-2 py-1"
-          value={userInput}
-          onChange={(e) => setUserInput(e.target.value)}
-          placeholder={t("run.typeMessage")}
-          onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-        />
-        <button
-          disabled={isLoading}
-          className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 disabled:opacity-50"
-          onClick={sendMessage}
-        >
-          {t("buttons.send", { ns: "common" })}
-        </button>
+      <div className="mt-2">
+        {showSuggestions && suggestions.length > 0 && (() => {
+          const rect = inputRef.current?.getBoundingClientRect();
+          if (!rect) return null;
+          return (
+            <ul
+              ref={suggestionListRef}
+              style={{ position: "fixed", top: rect.bottom + 4, left: rect.left, width: rect.width, zIndex: 9999 }}
+              className="bg-white border border-gray-200 rounded shadow-lg max-h-48 overflow-y-auto"
+            >
+              {suggestions.map((s, i) => (
+                <SuggestionItem key={s.id} s={s} active={i === suggestionIndex} onSelect={selectSuggestion} />
+              ))}
+            </ul>
+          );
+        })()}
+        <div className="flex gap-2">
+          <input
+            ref={inputRef}
+            disabled={isLoading}
+            autoComplete="off"
+            className="flex-1 border rounded px-2 py-1"
+            value={userInput}
+            onChange={handleInputChange}
+            placeholder={t("run.typeMessage")}
+            onKeyDown={(e) => {
+              if (showSuggestions && suggestions.length > 0) {
+                if (e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); setSuggestionIndex(i => Math.min(i + 1, suggestions.length - 1)); return; }
+                if (e.key === "ArrowUp")   { e.preventDefault(); e.stopPropagation(); setSuggestionIndex(i => Math.max(i - 1, -1)); return; }
+                if (e.key === "Enter" && suggestionIndex >= 0) { e.preventDefault(); selectSuggestion(suggestions[suggestionIndex].productId); return; }
+              }
+              if (e.key === "Escape") { setShowSuggestions(false); setSuggestionIndex(-1); return; }
+              if (e.key === "Enter" && !showSuggestions) sendMessage();
+            }}
+          />
+          <button
+            disabled={isLoading}
+            className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 disabled:opacity-50"
+            onClick={sendMessage}
+          >
+            {t("buttons.send", { ns: "common" })}
+          </button>
+        </div>
       </div>
     </div>
   );
