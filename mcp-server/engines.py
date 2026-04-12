@@ -242,7 +242,8 @@ async def order_engine(payload: Dict[str, Any]):
 @mcp_material_engine.tool()
 async def material_engine(payload: Dict[str, Any]):
     """
-    material engine tool.
+    Material engine tool. Fetches supply details and computes demand impacts
+    via the allocator app, then returns the enriched result.
 
     IMPORTANT:
     - All inputs MUST be wrapped inside a top-level key named "payload".
@@ -255,13 +256,17 @@ async def material_engine(payload: Dict[str, Any]):
         "message_id": 100,
         "type": "Material",
         "source": 1,
-        "recipients": [2, 500],
-        "quantity_decrease_percentage": 10,
-        "delivery_delay_days": 3
+        "recipients": [1],
+        "supply_id": "100-0018_1000_11/21/2024",
+        "delivery_delay_days": 30,
+        "quantity_decrease_pct": 0
       }
     }
     """
-    data = payload
+    import os
+    import httpx
+
+    data = dict(payload)
     print(f"material_engine() input payload: {data}")
 
     business_id = data.get("business_id")
@@ -269,10 +274,36 @@ async def material_engine(payload: Dict[str, Any]):
     original_event_type = data.get("type")
     source = data.get("source")
     recipients = data.get("recipients", [])
-    quantity_decrease_percentage = data.get("quantity_decrease_percentage", 0)
-    delivery_delay_days = data.get("delivery_delay_days", 0)
+    supply_id = data.get("supply_id", "")
+    delivery_delay_days = int(data.get("delivery_delay_days", 0))
+    quantity_decrease_pct = float(data.get("quantity_decrease_pct", 0.0))
 
-    time.sleep(5)
+    allocator_url = os.environ.get("ALLOCATOR_BACKEND_URL", "http://allocator-backend:8000")
+
+    # Call the allocator material-impact endpoint
+    material_impact: Dict[str, Any] = {}
+    if supply_id:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{allocator_url}/material-impact",
+                    json={
+                        "supplyId": supply_id,
+                        "deliveryDelayDays": delivery_delay_days,
+                        "quantityDecreasePct": quantity_decrease_pct,
+                    },
+                )
+                if resp.status_code == 200:
+                    material_impact = resp.json()
+                else:
+                    material_impact = {
+                        "error": f"allocator returned HTTP {resp.status_code}",
+                        "detail": resp.text,
+                    }
+        except Exception as exc:
+            material_impact = {"error": f"allocator unavailable: {exc}"}
+    else:
+        material_impact = {"error": "supply_id not provided in payload"}
 
     return {
         "business_id": business_id,
@@ -280,8 +311,10 @@ async def material_engine(payload: Dict[str, Any]):
         "type": original_event_type,
         "source": source,
         "recipients": recipients,
-        "quantity_decrease_percentage": quantity_decrease_percentage,
+        "supply_id": supply_id,
         "delivery_delay_days": delivery_delay_days,
+        "quantity_decrease_pct": quantity_decrease_pct,
+        "material_impact": material_impact,
     }
 
 
