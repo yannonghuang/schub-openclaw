@@ -44,6 +44,7 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3000
+      - WATCHPACK_POLLING=true
     # Run 'npm install' once in ./frontend on the host if node_modules is missing
     command: ["npm", "run", "dev"]
 

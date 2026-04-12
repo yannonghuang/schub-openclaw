@@ -201,6 +201,7 @@ services:
           # Leave MCP_API_KEY unset here for dev (no auth enforcement).
           # Set it in .env or as a real env var in prod to enable the key check.
           MCP_API_KEY: ${MCP_API_KEY:-}
+          ALLOCATOR_BACKEND_URL: http://allocator-backend:8000
       healthcheck:
           test: ["CMD", "curl", "-f", "http://localhost:9500/health"]
           interval: 5s
