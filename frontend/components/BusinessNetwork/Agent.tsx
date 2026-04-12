@@ -422,7 +422,7 @@ export default function Agent({
     material: "/api/allocator/products",
     supply:   "/api/allocator/supplies",
   };
-  const COMMAND_PATTERN = new RegExp(`\\/(${Object.keys(SLASH_COMMANDS).join("|")})(\\w*)`);
+  const COMMAND_PATTERN = new RegExp(`\\/(${Object.keys(SLASH_COMMANDS).join("|")})([^\\s]*)`);
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -451,7 +451,7 @@ export default function Agent({
   }, []);
 
   const selectSuggestion = useCallback((id: string) => {
-    setUserInput((prev) => prev.replace(COMMAND_PATTERN, id));
+    setUserInput((prev) => prev.replace(COMMAND_PATTERN, () => id));
     setShowSuggestions(false);
     setSuggestions([]);
     setSuggestionIndex(-1);
@@ -545,7 +545,7 @@ export default function Agent({
               if (showSuggestions && suggestions.length > 0) {
                 if (e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); setSuggestionIndex(i => Math.min(i + 1, suggestions.length - 1)); return; }
                 if (e.key === "ArrowUp")   { e.preventDefault(); e.stopPropagation(); setSuggestionIndex(i => Math.max(i - 1, -1)); return; }
-                if (e.key === "Enter" && suggestionIndex >= 0) { e.preventDefault(); selectSuggestion(suggestions[suggestionIndex].productId); return; }
+                if (e.key === "Enter" && suggestionIndex >= 0) { e.preventDefault(); selectSuggestion(suggestions[suggestionIndex].id); return; }
               }
               if (e.key === "Escape") { setShowSuggestions(false); setSuggestionIndex(-1); return; }
               if (e.key === "Enter" && !showSuggestions) sendMessage();

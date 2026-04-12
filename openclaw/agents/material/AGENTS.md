@@ -27,9 +27,10 @@ From the incoming message, extract a structured payload. Common fields:
 - `type` — set to `"Material"`
 - `source` — sender's business_id
 - `recipients` — list of recipient business_ids
-- `materials` — list of material names
-- `quantity_decrease_percentage` — always include; use `0` if not stated
-- `delivery_delay_days` — always include; use `0` if not stated
+- `supply_id` — the supply identifier from the user message (e.g. selected via `/supply` typeahead, looks like "100-0018_1000_11/21/2024"); include if present
+- `delivery_delay_days` — number of days the supply will be delayed; always include; use `0` if not stated
+- `quantity_decrease_pct` — percentage decrease in supply quantity; always include; use `0` if not stated
+- `materials` — list of material names, if mentioned separately
 
 Do not invent values. Omit fields that cannot be inferred.
 
@@ -86,15 +87,15 @@ Call `material_engine` with a `payload` wrapper:
     "type": "Material",
     "source": 2,
     "recipients": [1],
-    "materials": ["Copper Wire"],
-    "quantity_decrease_percentage": 10,
-    "delivery_delay_days": 3
+    "supply_id": "100-0018_1000_11/21/2024",
+    "delivery_delay_days": 30,
+    "quantity_decrease_pct": 0
   }
 }
 ```
 `payload` must be a non-empty JSON object under exactly the key `payload`. If `material_engine` is unavailable, report it and stop.
 
-The engine runs synchronously and returns the full result directly (no job_id). Use the result immediately before proceeding.
+The engine runs synchronously and returns the full result directly (no job_id). The result includes a `material_impact` field with the supply details and a list of impacted committed demands. Use the result immediately before proceeding.
 
 ### Step 2 — Route to Order Agent
 
@@ -105,11 +106,11 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Material engine complete — delegating to Order Agent\", \"agent\": \"material\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
-Call `sessions_spawn` to delegate to the **order** agent. Include `_material_session_key` (your own session key from Step 0) so the Order Agent can call back this session when the order is fully resolved:
+Call `sessions_spawn` to delegate to the **order** agent. Include `_material_session_key` (your own session key from Step 0) so the Order Agent can call back this session when the order is fully resolved. Include the `supply_id`, `delivery_delay_days`, and `impacted_demand_count` from the engine result so the Order Agent has the full context:
 ```json
 {
   "agentId": "order",
-  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Order\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"materials\":[\"Copper Wire\"],\"quantity_decrease_percentage\":10,\"delivery_delay_days\":3,\"_material_session_key\":\"agent:material:subagent:{uuid}\"}",
+  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Order\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"supply_id\":\"100-0018_1000_11/21/2024\",\"delivery_delay_days\":30,\"quantity_decrease_pct\":0,\"impacted_demand_count\":3,\"_material_session_key\":\"agent:material:subagent:{uuid}\"}",
   "mode": "run"
 }
 ```
@@ -163,7 +164,7 @@ Spawn the Planning Agent:
 ```json
 {
   "agentId": "planning",
-  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Planning\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"quantity_decrease_percentage\":10,\"delivery_delay_days\":3}",
+  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Planning\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"supply_id\":\"100-0018_1000_11/21/2024\",\"delivery_delay_days\":30,\"quantity_decrease_pct\":0}",
   "mode": "run"
 }
 ```
@@ -190,7 +191,7 @@ Workflow complete. Do not invoke any agent or tool again.
 
 Reached when the incoming message is an order completion signal (auto-announce from order subagent, or a callback payload containing `"type": "order_complete"`).
 
-Extract from the message: `business_id`, `message_id`, `source`, `recipients`, `materials`, `quantity_decrease_percentage`, `delivery_delay_days`.
+Extract from the message: `business_id`, `message_id`, `source`, `recipients`, `supply_id`, `delivery_delay_days`, `quantity_decrease_pct`.
 
 Check idempotency:
 ```
@@ -221,7 +222,7 @@ Spawn the Planning Agent using context from the completion message:
 ```json
 {
   "agentId": "planning",
-  "task": "{\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"type\":\"Planning\",\"original_type\":\"Material\",\"source\":SOURCE,\"recipients\":RECIPIENTS,\"quantity_decrease_percentage\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS}",
+  "task": "{\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"type\":\"Planning\",\"original_type\":\"Material\",\"source\":SOURCE,\"recipients\":RECIPIENTS,\"supply_id\":\"SUPPLY_ID\",\"delivery_delay_days\":DELAY_DAYS,\"quantity_decrease_pct\":QTY_PCT}",
   "mode": "run"
 }
 ```
