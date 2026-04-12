@@ -31,6 +31,8 @@ From the incoming message, extract a structured payload. Common fields:
 - `delivery_delay_days` — number of days the supply will be delayed; always include; use `0` if not stated
 - `quantity_decrease_pct` — percentage decrease in supply quantity; always include; use `0` if not stated
 - `materials` — list of material names, if mentioned separately
+- `case_id` — extracted from the `material_impact.caseId` field in the engine result (Step 1); not available at Phase 1 parse time
+- `plan_run_id` — extracted from the `material_impact.planRunId` field in the engine result (Step 1); not available at Phase 1 parse time
 
 Do not invent values. Omit fields that cannot be inferred.
 
@@ -106,11 +108,11 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Material engine complete — delegating to Order Agent\", \"agent\": \"material\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
-Call `sessions_spawn` to delegate to the **order** agent. Include `_material_session_key` (your own session key from Step 0) so the Order Agent can call back this session when the order is fully resolved. Include the `supply_id`, `delivery_delay_days`, and `impacted_demand_count` from the engine result so the Order Agent has the full context:
+Call `sessions_spawn` to delegate to the **order** agent. Include `_material_session_key` (your own session key from Step 0) so the Order Agent can call back this session when the order is fully resolved. Include `supply_id`, `delivery_delay_days`, `impacted_demand_count`, and **`case_id`** + **`plan_run_id`** extracted from `material_impact.caseId` / `material_impact.planRunId` in the engine result — the Order Agent needs these to call the assessment endpoint:
 ```json
 {
   "agentId": "order",
-  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Order\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"supply_id\":\"100-0018_1000_11/21/2024\",\"delivery_delay_days\":30,\"quantity_decrease_pct\":0,\"impacted_demand_count\":3,\"_material_session_key\":\"agent:material:subagent:{uuid}\"}",
+  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Order\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"supply_id\":\"100-0018_1000_11/21/2024\",\"delivery_delay_days\":30,\"quantity_decrease_pct\":0,\"case_id\":42,\"plan_run_id\":7,\"impacted_demand_count\":3,\"_material_session_key\":\"agent:material:subagent:{uuid}\"}",
   "mode": "run"
 }
 ```
