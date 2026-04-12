@@ -36,7 +36,7 @@ export default function MultiThread() {
     material: "/api/allocator/products",
     supply:   "/api/allocator/supplies",
   };
-  const NC_COMMAND_PATTERN = new RegExp(`\\/(${Object.keys(NC_SLASH_COMMANDS).join("|")})(\\w*)`);
+  const NC_COMMAND_PATTERN = new RegExp(`\\/(${Object.keys(NC_SLASH_COMMANDS).join("|")})([^\\s]*)`);
 
   useEffect(() => {
     if (newChatSuggestionIndex >= 0 && newChatSuggestionListRef.current) {
@@ -72,7 +72,7 @@ export default function MultiThread() {
   }, []);
 
   const selectNewChatSuggestion = useCallback((id: string) => {
-    setNewChatInput((prev) => prev.replace(NC_COMMAND_PATTERN, id));
+    setNewChatInput((prev) => prev.replace(NC_COMMAND_PATTERN, () => id));
     setShowNewChatSuggestions(false);
     setNewChatSuggestions([]);
     setNewChatSuggestionIndex(-1);
@@ -203,7 +203,7 @@ export default function MultiThread() {
                     if (showNewChatSuggestions && newChatSuggestions.length > 0) {
                       if (e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); setNewChatSuggestionIndex(i => Math.min(i + 1, newChatSuggestions.length - 1)); return; }
                       if (e.key === "ArrowUp")   { e.preventDefault(); e.stopPropagation(); setNewChatSuggestionIndex(i => Math.max(i - 1, -1)); return; }
-                      if (e.key === "Enter" && newChatSuggestionIndex >= 0) { e.preventDefault(); selectNewChatSuggestion(newChatSuggestions[newChatSuggestionIndex].productId); return; }
+                      if (e.key === "Enter" && newChatSuggestionIndex >= 0) { e.preventDefault(); selectNewChatSuggestion(newChatSuggestions[newChatSuggestionIndex].id); return; }
                     }
                     if (e.key === "Escape") { setShowNewChatSuggestions(false); setNewChatSuggestionIndex(-1); return; }
                     if (e.key === "Enter" && !showNewChatSuggestions) startNewChat();
