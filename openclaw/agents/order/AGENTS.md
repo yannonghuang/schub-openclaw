@@ -16,8 +16,11 @@ From the incoming message, extract a structured payload. Common fields:
 - `source` — sender's business_id
 - `recipients` — list of recipient business_ids
 - `materials` — list of material names
-- `quantity_decrease_percentage` — always include; use `0` if not stated
+- `supply_id` — supply identifier forwarded from the material event; include if present
+- `quantity_decrease_pct` — percentage decrease in supply quantity; always include; use `0` if not stated
 - `delivery_delay_days` — always include; use `0` if not stated
+- `case_id` — allocator case ID from the material impact result; required for assessment
+- `plan_run_id` — allocator plan run ID from the material impact result; include if present
 - `_material_session_key` — if present, the caller's session key to callback when order is fully resolved
 
 Do not invent values. Omit fields that cannot be inferred.
@@ -56,9 +59,9 @@ exec curl -s -X POST http://switch-service:6000/publish \
 
 Before submitting the job, persist the full task context (including `_material_session_key`) to a temp file so the callback session can recover it:
 ```
-exec sh -c 'echo "{\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"quantity_decrease_percentage\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS,\"_material_session_key\":\"MATERIAL_SESSION_KEY\"}" > /tmp/order_ctx_BUSINESS_ID_MESSAGE_ID.json'
+exec sh -c 'echo "{\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"supply_id\":\"SUPPLY_ID\",\"quantity_decrease_pct\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS,\"case_id\":CASE_ID,\"plan_run_id\":PLAN_RUN_ID,\"_material_session_key\":\"MATERIAL_SESSION_KEY\"}" > /tmp/order_ctx_BUSINESS_ID_MESSAGE_ID.json'
 ```
-Replace all placeholders with actual values. If `_material_session_key` is absent, omit that field but still write the file.
+Replace all placeholders with actual values. Omit `plan_run_id` if not present. If `_material_session_key` is absent, omit that field but still write the file.
 
 Call `order_engine` once with a `payload` wrapper. Include `_session_key` and `_agent_id` so the engine can resume this session when the job finishes:
 ```json
@@ -70,14 +73,17 @@ Call `order_engine` once with a `payload` wrapper. Include `_session_key` and `_
     "source": 2,
     "recipients": [1],
     "materials": ["Copper Wire"],
-    "quantity_decrease_percentage": 10,
+    "supply_id": "100-0018_1000_11/21/2024",
+    "quantity_decrease_pct": 10,
     "delivery_delay_days": 3,
+    "case_id": 42,
+    "plan_run_id": 7,
     "_session_key": "agent:order:subagent:{uuid}",
     "_agent_id": "order"
   }
 }
 ```
-Always forward `quantity_decrease_percentage` and `delivery_delay_days` — do not omit them even if zero. Always include `source` and `recipients`.
+Always forward `supply_id`, `quantity_decrease_pct`, `delivery_delay_days`, `case_id` — do not omit them even if zero. Always include `source` and `recipients`.
 
 If `order_engine` is unavailable, report it and stop.
 
@@ -99,17 +105,17 @@ exec curl -s -X POST http://switch-service:6000/publish \
 
 When this session is resumed with a job completion message, read the result from that message.
 
-Publish a trace event with the impact:
+Publish a trace event with the rating:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Order engine complete — impact: IMPACT\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Order engine complete — rating: RATING\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
-Replace IMPACT with the actual impact value from the result.
+Replace RATING with the `rating` field from the result (LOW, MEDIUM, or HIGH).
 
-Inspect the `impact` field:
-- If `impact = "low"`: automatically approved — proceed to Step 3.
-- If `impact = "high"` (or missing or unrecognised): publish these trace events in order, then send a confirmation request email using the `send_email` skill, then end your turn returning exactly: `{"outcome": "pending_approval", "session_key": "YOUR_SESSION_KEY"}`. Do NOT proceed to Step 3 or 4.
+Inspect the `rating` field:
+- If `rating = "LOW"`: automatically approved — proceed to Step 3.
+- If `rating = "HIGH"` or `rating = "MEDIUM"` (or missing or unrecognised): publish these trace events in order, then send a confirmation request email using the `send_email` skill (include the rating and explanation from the result), then end your turn returning exactly: `{"outcome": "pending_approval", "session_key": "YOUR_SESSION_KEY"}`. Do NOT proceed to Step 3 or 4.
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
@@ -147,8 +153,8 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Order rejected by human — cancelling\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 Send a rejection notification to the source business. Use the subject and body for the correct locale:
-- `LOCALE=en`: subject `"Order Analysis Result"`, body `"Order analysis complete. Outcome: rejected by human approver. Materials: MATERIALS."`
-- `LOCALE=zh`: subject `"订单分析结果"`, body `"订单分析完成。结果：已被人工审核员拒绝。物料：MATERIALS。"`
+- `LOCALE=en`: subject `"Order Analysis Result"`, body `"Order analysis complete. Outcome: rejected by human approver. Impact rating: RATING. EXPLANATION. Materials: MATERIALS."`
+- `LOCALE=zh`: subject `"订单分析结果"`, body `"订单分析完成。结果：已被人工审核员拒绝。影响评级：RATING。EXPLANATION。物料：MATERIALS。"`
 
 ```
 exec curl -s -X POST http://auth-service:4000/send-email \
@@ -198,8 +204,10 @@ exec curl -s -X POST http://switch-service:6000/publish \
 ```
 
 Send a notification email back to the source business. Use the subject and body for the correct locale:
-- `LOCALE=en`: subject `"Order Analysis Result"`, body `"Order analysis complete. Outcome: approved. Materials: MATERIALS."`
-- `LOCALE=zh`: subject `"订单分析结果"`, body `"订单分析完成。结果：已批准。物料：MATERIALS。"`
+- `LOCALE=en`: subject `"Order Analysis Result"`, body `"Order analysis complete. Outcome: approved. Impact rating: RATING. EXPLANATION. Materials: MATERIALS."`
+- `LOCALE=zh`: subject `"订单分析结果"`, body `"订单分析完成。结果：已批准。影响评级：RATING。EXPLANATION。物料：MATERIALS。"`
+
+Replace RATING and EXPLANATION with the values from the order engine result (or the persisted context).
 
 ```
 exec curl -s -X POST http://auth-service:4000/send-email \
@@ -219,10 +227,10 @@ exec curl -s -X POST http://openclaw:18789/v1/chat/completions \
   -H "Authorization: Bearer ${OPENCLAW_TOKEN}" \
   -H 'x-openclaw-session-key: MATERIAL_SESSION_KEY' \
   -H 'Content-Type: application/json' \
-  -d '{"model":"openclaw:material","messages":[{"role":"user","content":"{\"type\":\"order_complete\",\"outcome\":\"approved\",\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"quantity_decrease_percentage\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS}"}],"stream":true}' \
+  -d '{"model":"openclaw:material","messages":[{"role":"user","content":"{\"type\":\"order_complete\",\"outcome\":\"approved\",\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"supply_id\":\"SUPPLY_ID\",\"quantity_decrease_pct\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS,\"rating\":\"RATING\",\"explanation\":\"EXPLANATION\"}"}],"stream":true}' \
   --max-time 10 || true
 ```
-Replace all placeholders with actual values from the original task: MATERIAL_SESSION_KEY (from `_material_session_key`), BUSINESS_ID, MESSAGE_ID, SOURCE_ID, RECIPIENTS_JSON (e.g. `[1,101,103]`), MATERIALS_JSON (e.g. `["Steel Rod"]`), QTY_PCT, DELAY_DAYS.
+Replace all placeholders with actual values from the original task: MATERIAL_SESSION_KEY (from `_material_session_key`), BUSINESS_ID, MESSAGE_ID, SOURCE_ID, RECIPIENTS_JSON (e.g. `[1,101,103]`), MATERIALS_JSON (e.g. `["Steel Rod"]`), SUPPLY_ID, QTY_PCT, DELAY_DAYS, RATING, EXPLANATION.
 
 ### Step 4 — Report and terminate
 
@@ -235,7 +243,7 @@ exec curl -s -X POST http://switch-service:6000/publish \
 
 Return this exact JSON as your final response (replacing placeholders with actual values):
 ```json
-{"type": "order_complete", "outcome": "approved", "business_id": BUSINESS_ID, "message_id": "MESSAGE_ID", "source": SOURCE_ID, "recipients": RECIPIENTS_JSON, "materials": MATERIALS_JSON, "quantity_decrease_percentage": QTY_PCT, "delivery_delay_days": DELAY_DAYS}
+{"type": "order_complete", "outcome": "approved", "business_id": BUSINESS_ID, "message_id": "MESSAGE_ID", "source": SOURCE_ID, "recipients": RECIPIENTS_JSON, "materials": MATERIALS_JSON, "supply_id": "SUPPLY_ID", "quantity_decrease_pct": QTY_PCT, "delivery_delay_days": DELAY_DAYS, "rating": "RATING", "explanation": "EXPLANATION"}
 ```
 
 ---

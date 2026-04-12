@@ -164,26 +164,70 @@ async def mes_engine(payload: Dict[str, Any]):
 
 
 async def _order_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Long-running order analysis. Runs as a background job."""
+    """Calls the allocator material-impact-assessment endpoint (Mode A) and returns the rating."""
+    import os
+    import httpx
+
     business_id = data.get("business_id")
     message_id = data.get("message_id")
     event_type = data.get("type")
     source = data.get("source")
     recipients = data.get("recipients", [])
-    quantity_decrease_percentage = data.get("quantity_decrease_percentage", 0)
-    delivery_delay_days = data.get("delivery_delay_days", 0)
+    supply_id = data.get("supply_id", "")
+    delivery_delay_days = int(data.get("delivery_delay_days", 0))
+    # accept both naming conventions
+    quantity_decrease_pct = float(
+        data.get("quantity_decrease_pct", data.get("quantity_decrease_percentage", 0))
+    )
+    case_id = data.get("case_id")
+    plan_run_id = data.get("plan_run_id")
 
-    # Simulate long-running work (replace with real order analysis logic)
-    await asyncio.sleep(10)
+    allocator_url = os.environ.get("ALLOCATOR_BACKEND_URL", "http://allocator-backend:8000")
+
+    assessment: Dict[str, Any] = {}
+    if supply_id and case_id is not None:
+        req_body: Dict[str, Any] = {
+            "supplyId": supply_id,
+            "deliveryDelayDays": delivery_delay_days,
+            "quantityDecreasePct": quantity_decrease_pct,
+            "caseId": int(case_id),
+        }
+        if plan_run_id is not None:
+            req_body["planRunId"] = int(plan_run_id)
+        try:
+            async with httpx.AsyncClient(timeout=90) as client:
+                resp = await client.post(
+                    f"{allocator_url}/material-impact-assessment",
+                    json=req_body,
+                )
+                if resp.status_code == 200:
+                    assessment = resp.json()
+                else:
+                    assessment = {
+                        "error": f"assessment returned HTTP {resp.status_code}",
+                        "detail": resp.text,
+                    }
+        except Exception as exc:
+            assessment = {"error": f"assessment unavailable: {exc}"}
+    else:
+        assessment = {"error": "supply_id and case_id are required for assessment"}
+
+    rating = assessment.get("rating", "MEDIUM")
+    explanation = assessment.get("explanation", "")
 
     return {
         "status": "processed",
-        "impact": "high" if quantity_decrease_percentage > 5 or delivery_delay_days > 5 else "low",
+        "rating": rating,
+        "explanation": explanation,
+        "assessment": assessment,
         "business_id": business_id,
         "message_id": message_id,
         "type": event_type,
         "source": source,
         "recipients": recipients,
+        "supply_id": supply_id,
+        "delivery_delay_days": delivery_delay_days,
+        "quantity_decrease_pct": quantity_decrease_pct,
     }
 
 

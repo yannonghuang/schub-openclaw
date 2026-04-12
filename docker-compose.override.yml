@@ -16,13 +16,13 @@ services:
       - ./services/switch:/app
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "6000", "--reload"]
 
-  geopol-service:
-    build:
-      target: dev
-    image: schub-geopol:dev
-    volumes:
-      - ./services/geopol:/app
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8500", "--reload"]
+  #geopol-service:
+  #  build:
+  #    target: dev
+  #  image: schub-geopol:dev
+  #  volumes:
+  #    - ./services/geopol:/app
+  #  command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8500", "--reload"]
 
   audit-service:
     build:
