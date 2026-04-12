@@ -34,10 +34,10 @@ services:
       target: prod
     image: schub-proxy:prod
 
-  geopol-service:
-    build:
-      target: prod
-    image: schub-geopol:prod
+  #geopol-service:
+  #  build:
+  #    target: prod
+  #  image: schub-geopol:prod
 
   adaptor-service:
     build:

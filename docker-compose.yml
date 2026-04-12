@@ -136,17 +136,17 @@ services:
     ports:
       - "6000:6000"
 
-  geopol-service:
-    build:
-      context: .
-      dockerfile: services/geopol/Dockerfile
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - GEOPOL_INBOUND_CHANNEL=business:-1:channel
-    depends_on:
-      - redis
-    ports:
-      - "8500:8500"
+  #geopol-service:
+  #  build:
+  #    context: .
+  #    dockerfile: services/geopol/Dockerfile
+  #  environment:
+  #    - REDIS_URL=redis://redis:6379
+  #    - GEOPOL_INBOUND_CHANNEL=business:-1:channel
+  #  depends_on:
+  #    - redis
+  #  ports:
+  #    - "8500:8500"
 
   audit-service:
     build:
