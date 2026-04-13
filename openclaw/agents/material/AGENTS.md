@@ -98,12 +98,13 @@ Call `material_engine` with a `payload` wrapper:
 `payload` must be a non-empty JSON object under exactly the key `payload`. If `material_engine` is unavailable, report it and stop.
 
 The engine submits a re-plan job to the allocator and polls internally until complete, then returns the full result directly (no job_id exposed to you). The result includes a `material_impact` field with:
-- `baselinePlanRunId` — the last successful plan run used as baseline
-- `contingentPlanRunId` — the newly-created contingent plan run (what-if branch)
+- `caseId` — the allocator case ID
+- `baselinePlanRunId` — the last successful plan run used as baseline (store as `plan_run_id`)
+- `contingentPlanRunId` — the newly-created contingent plan run (store as `contingent_plan_run_id`)
 - `impactedDemandCount` — number of demands that would degrade
 - `impacts` — per demand: `baselineCommittedQty`, `contingentCommittedQty`, `qtyDelta`, `status` ("newly_failed" | "qty_reduced")
 
-Use the result immediately before proceeding.
+**Immediately extract and store**: `case_id = material_impact.caseId`, `plan_run_id = material_impact.baselinePlanRunId`, `contingent_plan_run_id = material_impact.contingentPlanRunId`. These are required for the order and planning agents.
 
 ### Step 2 — Route to Order Agent
 
@@ -114,11 +115,11 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Material engine complete — delegating to Order Agent\", \"agent\": \"material\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
-Call `sessions_spawn` to delegate to the **order** agent. Include `_material_session_key` (your own session key from Step 0) so the Order Agent can call back this session when the order is fully resolved. Pass only scalar values: `supply_id`, `delivery_delay_days`, `quantity_decrease_pct`, `impacted_demand_count`, `case_id`, and `plan_run_id` (extracted from `material_impact.caseId` / `material_impact.planRunId`). Do NOT embed the `material_impact` object — the order engine fetches impact data autonomously using the IDs.
+Call `sessions_spawn` to delegate to the **order** agent. Include `_material_session_key` (your own session key from Step 0) so the Order Agent can call back this session when the order is fully resolved. Pass only scalar values — do NOT embed the `material_impact` object.
 ```json
 {
   "agentId": "order",
-  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Order\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"supply_id\":\"100-0018_1000_11/21/2024\",\"delivery_delay_days\":30,\"quantity_decrease_pct\":0,\"case_id\":42,\"plan_run_id\":7,\"impacted_demand_count\":3,\"_material_session_key\":\"agent:material:subagent:{uuid}\"}",
+  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Order\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"supply_id\":\"100-0018_1000_11/21/2024\",\"delivery_delay_days\":30,\"quantity_decrease_pct\":0,\"case_id\":19,\"plan_run_id\":35,\"impacted_demand_count\":3,\"_material_session_key\":\"agent:material:subagent:{uuid}\"}",
   "mode": "run"
 }
 ```
@@ -168,11 +169,11 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Preparing to spawn Planning Agent...\", \"agent\": \"material\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
-Spawn the Planning Agent:
+Spawn the Planning Agent. Include `case_id`, `plan_run_id`, and `contingent_plan_run_id` — these are required for the planning agent to run assessment and promote the contingent run:
 ```json
 {
   "agentId": "planning",
-  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Planning\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"supply_id\":\"100-0018_1000_11/21/2024\",\"delivery_delay_days\":30,\"quantity_decrease_pct\":0}",
+  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Planning\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"supply_id\":\"100-0018_1000_11/21/2024\",\"delivery_delay_days\":30,\"quantity_decrease_pct\":0,\"case_id\":19,\"plan_run_id\":35,\"contingent_plan_run_id\":47}",
   "mode": "run"
 }
 ```
@@ -199,7 +200,7 @@ Workflow complete. Do not invoke any agent or tool again.
 
 Reached when the incoming message is an order completion signal (auto-announce from order subagent, or a callback payload containing `"type": "order_complete"`).
 
-Extract from the message: `business_id`, `message_id`, `source`, `recipients`, `supply_id`, `delivery_delay_days`, `quantity_decrease_pct`.
+Extract from the message: `business_id`, `message_id`, `source`, `recipients`, `supply_id`, `delivery_delay_days`, `quantity_decrease_pct`, `case_id`, `plan_run_id`, `contingent_plan_run_id` (the order completion callback should include these; if absent, recover them from the session history or the context persisted in Step 0).
 
 Check idempotency:
 ```
@@ -226,11 +227,11 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Preparing to spawn Planning Agent...\", \"agent\": \"material\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
-Spawn the Planning Agent using context from the completion message:
+Spawn the Planning Agent using context from the completion message. Include `case_id`, `plan_run_id`, and `contingent_plan_run_id` — required for the planning agent to run assessment and promote:
 ```json
 {
   "agentId": "planning",
-  "task": "{\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"type\":\"Planning\",\"original_type\":\"Material\",\"source\":SOURCE,\"recipients\":RECIPIENTS,\"supply_id\":\"SUPPLY_ID\",\"delivery_delay_days\":DELAY_DAYS,\"quantity_decrease_pct\":QTY_PCT}",
+  "task": "{\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"type\":\"Planning\",\"original_type\":\"Material\",\"source\":SOURCE,\"recipients\":RECIPIENTS,\"supply_id\":\"SUPPLY_ID\",\"delivery_delay_days\":DELAY_DAYS,\"quantity_decrease_pct\":QTY_PCT,\"case_id\":CASE_ID,\"plan_run_id\":PLAN_RUN_ID,\"contingent_plan_run_id\":CONTINGENT_PLAN_RUN_ID}",
   "mode": "run"
 }
 ```

@@ -70,9 +70,10 @@ async def calculate_expression(input: CalculatorInput):
 
 
 @mcp_supply_chain_engine.tool()
-async def supply_chain_engine(payload: Dict[str, Any]):
+async def planning_engine(payload: Dict[str, Any]):
     """
-    Supply Chain engine tool.
+    Planning engine tool. Fetches the impact assessment for a contingent plan run
+    and returns the rating, explanation, and impacted demand details.
 
     IMPORTANT:
     - All inputs MUST be wrapped inside a top-level key named "payload".
@@ -82,37 +83,92 @@ async def supply_chain_engine(payload: Dict[str, Any]):
     {
       "payload": {
         "business_id": 42,
-        "message_id": 100,
-        "type": "Planning",
+        "case_id": 19,
+        "plan_run_id": 35,
+        "contingent_plan_run_id": 47,
+        "supply_id": "310-0591_2000_7/3/2024",
+        "delivery_delay_days": 0,
+        "quantity_decrease_pct": 100,
         "source": 1,
-        "recipients": [2, 500],
-        "quantity_decrease_percentage": 10,
-        "delivery_delay_days": 3
+        "recipients": [2]
       }
     }
     """
-    data = payload
-    print(f"supply_chain_engine() input payload: {data}")
+    import os
+    import httpx
+
+    data = dict(payload)
+    print(f"planning_engine() input payload: {data}", flush=True)
 
     business_id = data.get("business_id")
     message_id = data.get("message_id")
-    event_type = data.get("type")
     source = data.get("source")
     recipients = data.get("recipients", [])
-    quantity_decrease_percentage = data.get("quantity_decrease_percentage", 0)
-    delivery_delay_days = data.get("delivery_delay_days", 0)
+    case_id = data.get("case_id")
+    plan_run_id = data.get("plan_run_id")
+    contingent_plan_run_id = data.get("contingent_plan_run_id")
+    supply_id = data.get("supply_id", "")
+    delivery_delay_days = int(data.get("delivery_delay_days", 0))
+    quantity_decrease_pct = float(
+        data.get("quantity_decrease_pct", data.get("quantity_decrease_percentage", 0))
+    )
 
-    time.sleep(5)
+    allocator_url = os.environ.get("ALLOCATOR_BACKEND_URL", "http://allocator-backend:8000")
+
+    assessment: Dict[str, Any] = {}
+    if supply_id and case_id is not None:
+        req_body: Dict[str, Any] = {
+            "supplyId": supply_id,
+            "deliveryDelayDays": delivery_delay_days,
+            "quantityDecreasePct": quantity_decrease_pct,
+            "caseId": int(case_id),
+        }
+        if plan_run_id is not None:
+            req_body["planRunId"] = int(plan_run_id)
+        try:
+            async with httpx.AsyncClient(timeout=90) as client:
+                resp = await client.post(
+                    f"{allocator_url}/material-impact-assessment",
+                    json=req_body,
+                )
+                if resp.status_code == 200:
+                    assessment = resp.json()
+                    print(
+                        f"planning_engine() assessment: rating={assessment.get('rating')} "
+                        f"impacted={assessment.get('impactedDemandCount')}",
+                        flush=True,
+                    )
+                else:
+                    assessment = {
+                        "error": f"assessment returned HTTP {resp.status_code}",
+                        "detail": resp.text,
+                    }
+        except Exception as exc:
+            assessment = {"error": f"assessment unavailable: {exc}"}
+    else:
+        assessment = {"error": "supply_id and case_id are required for assessment"}
+
+    rating = assessment.get("rating", "MEDIUM")
+    explanation = assessment.get("explanation", "")
+    impacted_demands = assessment.get("impacts", [])
 
     return {
         "status": "processed",
-        "impact": "high" if quantity_decrease_percentage > 5 or delivery_delay_days > 5 else "low",
-        "received_payload": data,
+        "rating": rating,
+        "explanation": explanation,
+        "assessment": assessment,
         "business_id": business_id,
         "message_id": message_id,
-        "type": event_type,
         "source": source,
         "recipients": recipients,
+        "case_id": case_id,
+        "plan_run_id": plan_run_id,
+        "contingent_plan_run_id": contingent_plan_run_id,
+        "supply_id": supply_id,
+        "delivery_delay_days": delivery_delay_days,
+        "quantity_decrease_pct": quantity_decrease_pct,
+        "impacted_demand_count": len(impacted_demands),
+        "impacted_demands": impacted_demands,
     }
 
 

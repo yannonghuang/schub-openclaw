@@ -57,11 +57,11 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Order engine started\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
-Before submitting the job, persist the full task context (including `_material_session_key`) to a temp file so the callback session can recover it:
+Before submitting the job, persist the full task context (including `_material_session_key` and the plan run IDs) to a temp file so the callback session can recover them:
 ```
-exec sh -c 'echo "{\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"supply_id\":\"SUPPLY_ID\",\"quantity_decrease_pct\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS,\"case_id\":CASE_ID,\"plan_run_id\":PLAN_RUN_ID,\"_material_session_key\":\"MATERIAL_SESSION_KEY\"}" > /tmp/order_ctx_BUSINESS_ID_MESSAGE_ID.json'
+exec sh -c 'echo "{\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"supply_id\":\"SUPPLY_ID\",\"quantity_decrease_pct\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS,\"case_id\":CASE_ID,\"plan_run_id\":PLAN_RUN_ID,\"contingent_plan_run_id\":CONTINGENT_PLAN_RUN_ID,\"_material_session_key\":\"MATERIAL_SESSION_KEY\"}" > /tmp/order_ctx_BUSINESS_ID_MESSAGE_ID.json'
 ```
-Replace all placeholders with actual values. Omit `plan_run_id` if not present. If `_material_session_key` is absent, omit that field but still write the file.
+Replace all placeholders with actual values. Omit fields not present. Include `contingent_plan_run_id` if available — the material agent needs it to spawn the planning agent.
 
 Call `order_engine` once with a `payload` wrapper. Include `_session_key` and `_agent_id` so the engine can resume this session when the job finishes:
 ```json
@@ -227,10 +227,10 @@ exec curl -s -X POST http://openclaw:18789/v1/chat/completions \
   -H "Authorization: Bearer ${OPENCLAW_TOKEN}" \
   -H 'x-openclaw-session-key: MATERIAL_SESSION_KEY' \
   -H 'Content-Type: application/json' \
-  -d '{"model":"openclaw:material","messages":[{"role":"user","content":"{\"type\":\"order_complete\",\"outcome\":\"approved\",\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"supply_id\":\"SUPPLY_ID\",\"quantity_decrease_pct\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS,\"rating\":\"RATING\",\"explanation\":\"EXPLANATION\"}"}],"stream":true}' \
+  -d '{"model":"openclaw:material","messages":[{"role":"user","content":"{\"type\":\"order_complete\",\"outcome\":\"approved\",\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"supply_id\":\"SUPPLY_ID\",\"quantity_decrease_pct\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS,\"rating\":\"RATING\",\"explanation\":\"EXPLANATION\",\"case_id\":CASE_ID,\"plan_run_id\":PLAN_RUN_ID,\"contingent_plan_run_id\":CONTINGENT_PLAN_RUN_ID}"}],"stream":true}' \
   --max-time 10 || true
 ```
-Replace all placeholders with actual values from the original task: MATERIAL_SESSION_KEY (from `_material_session_key`), BUSINESS_ID, MESSAGE_ID, SOURCE_ID, RECIPIENTS_JSON (e.g. `[1,101,103]`), MATERIALS_JSON (e.g. `["Steel Rod"]`), SUPPLY_ID, QTY_PCT, DELAY_DAYS, RATING, EXPLANATION.
+Replace all placeholders with actual values from the original task: MATERIAL_SESSION_KEY (from `_material_session_key`), BUSINESS_ID, MESSAGE_ID, SOURCE_ID, RECIPIENTS_JSON (e.g. `[1,101,103]`), MATERIALS_JSON (e.g. `["Steel Rod"]`), SUPPLY_ID, QTY_PCT, DELAY_DAYS, RATING, EXPLANATION, CASE_ID, PLAN_RUN_ID, CONTINGENT_PLAN_RUN_ID (from the persisted context file).
 
 ### Step 4 — Report and terminate
 
