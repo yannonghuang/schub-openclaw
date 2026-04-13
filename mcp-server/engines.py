@@ -163,8 +163,51 @@ async def mes_engine(payload: Dict[str, Any]):
     }
 
 
+async def _fetch_material_impact(
+    supply_id: str,
+    delivery_delay_days: int,
+    quantity_decrease_pct: float,
+    plan_run_id: Any,
+    allocator_url: str,
+) -> Dict[str, Any]:
+    """Run an async re-plan and return the MaterialImpactResult dict, or {} on failure."""
+    import httpx, asyncio
+    post_body: Dict[str, Any] = {
+        "supplyId": supply_id,
+        "deliveryDelayDays": delivery_delay_days,
+        "quantityDecreasePct": quantity_decrease_pct,
+        "persist": False,  # bulk/diagnostic call — don't create a contingent plan run
+    }
+    if plan_run_id is not None:
+        post_body["planRunId"] = int(plan_run_id)
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(f"{allocator_url}/material-impact", json=post_body)
+            if r.status_code not in (200, 202):
+                return {}
+            job_id = r.json().get("jobId")
+            if not job_id:
+                return {}
+            # Poll for result
+            delay, max_delay, deadline = 1.0, 8.0, asyncio.get_event_loop().time() + 90
+            while asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, max_delay)
+                poll = await client.get(f"{allocator_url}/material-impact/status/{job_id}")
+                if poll.status_code != 200:
+                    continue
+                body = poll.json()
+                if body.get("status") == "completed":
+                    return body.get("result", {})
+                if body.get("status") == "failed":
+                    return {}
+    except Exception:
+        pass
+    return {}
+
+
 async def _order_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Calls the allocator material-impact-assessment endpoint (Mode A) and returns the rating."""
+    """Runs the order analysis: resolves material impact then calls the assessment endpoint."""
     import os
     import httpx
 
@@ -184,8 +227,16 @@ async def _order_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
 
     allocator_url = os.environ.get("ALLOCATOR_BACKEND_URL", "http://allocator-backend:8000")
 
-    # Pre-computed material impact from material_engine (Mode B); falls back to Mode A if absent.
-    material_impact = data.get("material_impact")
+    # Resolve material impact:
+    # 1. Use pre-computed result if already passed in (e.g. forwarded from material_engine).
+    # 2. Otherwise compute it now via the async re-plan endpoint so assessment uses
+    #    accurate baseline-committed quantities instead of the pegging-tree approximation.
+    material_impact: Dict[str, Any] = data.get("material_impact") or {}
+    if not (material_impact and isinstance(material_impact, dict) and "impacts" in material_impact):
+        if supply_id:
+            material_impact = await _fetch_material_impact(
+                supply_id, delivery_delay_days, quantity_decrease_pct, plan_run_id, allocator_url
+            )
 
     assessment: Dict[str, Any] = {}
     if supply_id and case_id is not None:
@@ -197,8 +248,7 @@ async def _order_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
         }
         if plan_run_id is not None:
             req_body["planRunId"] = int(plan_run_id)
-        # Pass pre-computed impact as Mode B when available (more accurate than sync pegging walk)
-        if material_impact and isinstance(material_impact, dict) and "impacts" in material_impact:
+        if material_impact and "impacts" in material_impact:
             req_body["impact"] = material_impact
         try:
             async with httpx.AsyncClient(timeout=90) as client:
