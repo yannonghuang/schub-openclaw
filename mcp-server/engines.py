@@ -184,13 +184,16 @@ async def _fetch_material_impact(
         async with httpx.AsyncClient(timeout=120) as client:
             r = await client.post(f"{allocator_url}/material-impact", json=post_body)
             if r.status_code not in (200, 202):
+                print(f"[_fetch_material_impact] submit failed: HTTP {r.status_code}", flush=True)
                 return {}
             job_id = r.json().get("jobId")
             if not job_id:
                 return {}
+            print(f"[_fetch_material_impact] submitted job {job_id}, polling...", flush=True)
             # Poll for result
-            delay, max_delay, deadline = 1.0, 8.0, asyncio.get_event_loop().time() + 90
-            while asyncio.get_event_loop().time() < deadline:
+            loop = asyncio.get_running_loop()
+            delay, max_delay, deadline = 1.0, 8.0, loop.time() + 90
+            while loop.time() < deadline:
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, max_delay)
                 poll = await client.get(f"{allocator_url}/material-impact/status/{job_id}")
@@ -198,11 +201,14 @@ async def _fetch_material_impact(
                     continue
                 body = poll.json()
                 if body.get("status") == "completed":
-                    return body.get("result", {})
+                    result = body.get("result", {})
+                    print(f"[_fetch_material_impact] job {job_id} complete — {len(result.get('impacts', []))} impacts", flush=True)
+                    return result
                 if body.get("status") == "failed":
+                    print(f"[_fetch_material_impact] job {job_id} failed", flush=True)
                     return {}
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[_fetch_material_impact] error: {exc!r}", flush=True)
     return {}
 
 
@@ -234,9 +240,18 @@ async def _order_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
     material_impact: Dict[str, Any] = data.get("material_impact") or {}
     if not (material_impact and isinstance(material_impact, dict) and "impacts" in material_impact):
         if supply_id:
+            print(
+                f"[order_engine] material_impact not pre-computed — running fresh re-plan "
+                f"(supply={supply_id} delay={delivery_delay_days} qty_pct={quantity_decrease_pct} plan_run_id={plan_run_id})",
+                flush=True,
+            )
             material_impact = await _fetch_material_impact(
                 supply_id, delivery_delay_days, quantity_decrease_pct, plan_run_id, allocator_url
             )
+        else:
+            print("[order_engine] no supply_id — skipping material impact fetch", flush=True)
+    else:
+        print(f"[order_engine] using pre-computed material_impact ({len(material_impact.get('impacts', []))} impacts)", flush=True)
 
     assessment: Dict[str, Any] = {}
     if supply_id and case_id is not None:

@@ -14,6 +14,7 @@ The notify callback is injected by main.py to avoid a circular import.
 import asyncio
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional
 
@@ -70,7 +71,8 @@ async def submit_job(
 
 async def _resume_session(job_id: str, update: dict) -> None:
     """POST to the OpenClaw gateway to resume the agent session that submitted this job.
-    Fire-and-forget: we only need the message delivered, not the LLM response."""
+    Reads the SSE stream until [DONE] so we don't close the connection prematurely —
+    OpenClaw may abort the agent turn if the client disconnects mid-stream."""
     entry = _SESSION_KEYS.pop(job_id, None)
     if not entry:
         return
@@ -80,9 +82,10 @@ async def _resume_session(job_id: str, update: dict) -> None:
     result = update.get("result") or update.get("error")
     content = f"Job {job_id} {status}. Result: {json.dumps(result)}"
 
+    print(f"[job_store] resuming session {session_key} for job {job_id} (status={status})", flush=True)
     try:
-        # Use stream=True and immediately close — delivers the message without
-        # waiting for the LLM to finish generating its response.
+        # Keep the connection open until OpenClaw finishes the agent turn ([DONE] chunk).
+        # read=None disables the body read timeout so long agent turns don't time out.
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
         ) as c:
@@ -100,10 +103,19 @@ async def _resume_session(job_id: str, update: dict) -> None:
                     "stream": True,
                 },
             ) as resp:
-                print(f"[job_store] resume delivered to session {session_key}: HTTP {resp.status_code}")
-                # Don't read the body — we just needed delivery
+                print(f"[job_store] resume: HTTP {resp.status_code} for session {session_key}", flush=True)
+                if resp.status_code == 200:
+                    # Drain the SSE stream until [DONE] — this keeps the connection alive
+                    # so OpenClaw can complete the full agent turn without a disconnect abort.
+                    async for chunk in resp.aiter_bytes(chunk_size=4096):
+                        if b"[DONE]" in chunk:
+                            break
+                else:
+                    body = await resp.aread()
+                    print(f"[job_store] resume non-200: {body[:300]}", flush=True)
+        print(f"[job_store] resume complete for session {session_key}", flush=True)
     except Exception as e:
-        print(f"[job_store] failed to resume session {session_key} for job {job_id}: {e!r}")
+        print(f"[job_store] failed to resume session {session_key} for job {job_id}: {e!r}", flush=True)
 
 
 async def _run(job_id: str, payload: dict) -> None:
@@ -113,7 +125,7 @@ async def _run(job_id: str, payload: dict) -> None:
         return
 
     started_at = datetime.now(timezone.utc)
-    print(f"[job_store] job {job_id} started at {started_at.isoformat()}")
+    print(f"[job_store] job {job_id} started at {started_at.isoformat()}", flush=True)
 
     try:
         result = await engine_fn(payload)
@@ -123,7 +135,7 @@ async def _run(job_id: str, payload: dict) -> None:
 
     ended_at = datetime.now(timezone.utc)
     elapsed = (ended_at - started_at).total_seconds()
-    print(f"[job_store] job {job_id} ended at {ended_at.isoformat()} (elapsed {elapsed:.1f}s, status={update['status']})")
+    print(f"[job_store] job {job_id} ended at {ended_at.isoformat()} (elapsed {elapsed:.1f}s, status={update['status']})", flush=True)
 
     try:
         async with httpx.AsyncClient(timeout=10) as c:
