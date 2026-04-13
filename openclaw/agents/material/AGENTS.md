@@ -114,11 +114,11 @@ exec curl -s -X POST http://switch-service:6000/publish \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Material engine complete — delegating to Order Agent\", \"agent\": \"material\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
-Call `sessions_spawn` to delegate to the **order** agent. Include `_material_session_key` (your own session key from Step 0) so the Order Agent can call back this session when the order is fully resolved. Include `supply_id`, `delivery_delay_days`, `impacted_demand_count`, and **`case_id`** + **`plan_run_id`** extracted from `material_impact.caseId` / `material_impact.planRunId` in the engine result — the Order Agent needs these to call the assessment endpoint:
+Call `sessions_spawn` to delegate to the **order** agent. Include `_material_session_key` (your own session key from Step 0) so the Order Agent can call back this session when the order is fully resolved. Include `supply_id`, `delivery_delay_days`, `impacted_demand_count`, **`case_id`** + **`plan_run_id`** extracted from `material_impact.caseId` / `material_impact.planRunId`, and the **full `material_impact` object** (the Order Agent passes this to the assessment engine so it uses the accurate re-plan result instead of re-computing):
 ```json
 {
   "agentId": "order",
-  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Order\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"supply_id\":\"100-0018_1000_11/21/2024\",\"delivery_delay_days\":30,\"quantity_decrease_pct\":0,\"case_id\":42,\"plan_run_id\":7,\"impacted_demand_count\":3,\"_material_session_key\":\"agent:material:subagent:{uuid}\"}",
+  "task": "{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Order\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"supply_id\":\"100-0018_1000_11/21/2024\",\"delivery_delay_days\":30,\"quantity_decrease_pct\":0,\"case_id\":42,\"plan_run_id\":7,\"impacted_demand_count\":3,\"material_impact\":{...full object from engine result...},\"_material_session_key\":\"agent:material:subagent:{uuid}\"}",
   "mode": "run"
 }
 ```

@@ -21,6 +21,7 @@ From the incoming message, extract a structured payload. Common fields:
 - `delivery_delay_days` — always include; use `0` if not stated
 - `case_id` — allocator case ID from the material impact result; required for assessment
 - `plan_run_id` — allocator plan run ID from the material impact result; include if present
+- `material_impact` — full pre-computed impact object forwarded from material engine; include if present (enables accurate Mode B assessment)
 - `_material_session_key` — if present, the caller's session key to callback when order is fully resolved
 
 Do not invent values. Omit fields that cannot be inferred.
@@ -78,12 +79,13 @@ Call `order_engine` once with a `payload` wrapper. Include `_session_key` and `_
     "delivery_delay_days": 3,
     "case_id": 42,
     "plan_run_id": 7,
+    "material_impact": {"caseId": 42, "planRunId": 7, "impacts": [...], "...": "..."},
     "_session_key": "agent:order:subagent:{uuid}",
     "_agent_id": "order"
   }
 }
 ```
-Always forward `supply_id`, `quantity_decrease_pct`, `delivery_delay_days`, `case_id` — do not omit them even if zero. Always include `source` and `recipients`.
+Always forward `supply_id`, `quantity_decrease_pct`, `delivery_delay_days`, `case_id` — do not omit them even if zero. Always include `source` and `recipients`. Include `material_impact` if present in the incoming payload — it enables accurate Mode B assessment (pass the full object verbatim).
 
 If `order_engine` is unavailable, report it and stop.
 

@@ -184,6 +184,9 @@ async def _order_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
 
     allocator_url = os.environ.get("ALLOCATOR_BACKEND_URL", "http://allocator-backend:8000")
 
+    # Pre-computed material impact from material_engine (Mode B); falls back to Mode A if absent.
+    material_impact = data.get("material_impact")
+
     assessment: Dict[str, Any] = {}
     if supply_id and case_id is not None:
         req_body: Dict[str, Any] = {
@@ -194,6 +197,9 @@ async def _order_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
         }
         if plan_run_id is not None:
             req_body["planRunId"] = int(plan_run_id)
+        # Pass pre-computed impact as Mode B when available (more accurate than sync pegging walk)
+        if material_impact and isinstance(material_impact, dict) and "impacts" in material_impact:
+            req_body["impact"] = material_impact
         try:
             async with httpx.AsyncClient(timeout=90) as client:
                 resp = await client.post(
