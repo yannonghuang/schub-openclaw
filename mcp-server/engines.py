@@ -286,8 +286,9 @@ async def order_engine(payload: Dict[str, Any]):
 @mcp_material_engine.tool()
 async def material_engine(payload: Dict[str, Any]):
     """
-    Material engine tool. Fetches supply details and computes demand impacts
-    via the allocator app, then returns the enriched result.
+    Material engine tool. Submits a material impact re-plan job to the allocator,
+    polls until complete, and returns the enriched result including a diff of
+    which committed demands would degrade under the proposed supply change.
 
     IMPORTANT:
     - All inputs MUST be wrapped inside a top-level key named "payload".
@@ -306,6 +307,11 @@ async def material_engine(payload: Dict[str, Any]):
         "quantity_decrease_pct": 0
       }
     }
+
+    The engine polls the allocator asynchronously and returns the full result directly
+    (no job_id exposed to the caller). The result includes a `material_impact` field
+    with `baselinePlanRunId`, `contingentPlanRunId`, and the list of impacted demands
+    showing baselineCommittedQty vs contingentCommittedQty for each.
     """
     import os
     import httpx
@@ -324,12 +330,13 @@ async def material_engine(payload: Dict[str, Any]):
 
     allocator_url = os.environ.get("ALLOCATOR_BACKEND_URL", "http://allocator-backend:8000")
 
-    # Call the allocator material-impact endpoint
+    # Submit async re-plan job and poll for result
     material_impact: Dict[str, Any] = {}
     if supply_id:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
+                # 1. Submit
+                submit_resp = await client.post(
                     f"{allocator_url}/material-impact",
                     json={
                         "supplyId": supply_id,
@@ -337,13 +344,48 @@ async def material_engine(payload: Dict[str, Any]):
                         "quantityDecreasePct": quantity_decrease_pct,
                     },
                 )
-                if resp.status_code == 200:
-                    material_impact = resp.json()
-                else:
+                if submit_resp.status_code != 202:
                     material_impact = {
-                        "error": f"allocator returned HTTP {resp.status_code}",
-                        "detail": resp.text,
+                        "error": f"allocator returned HTTP {submit_resp.status_code}",
+                        "detail": submit_resp.text,
                     }
+                else:
+                    job_id = submit_resp.json().get("jobId")
+                    if not job_id:
+                        material_impact = {"error": "allocator did not return a jobId"}
+                    else:
+                        # 2. Poll with exponential back-off (max ~120s total)
+                        delay = 1.0
+                        max_delay = 8.0
+                        max_wait = 120.0
+                        elapsed = 0.0
+                        while elapsed < max_wait:
+                            await asyncio.sleep(delay)
+                            elapsed += delay
+                            delay = min(delay * 2, max_delay)
+
+                            poll_resp = await client.get(
+                                f"{allocator_url}/material-impact/status/{job_id}"
+                            )
+                            if poll_resp.status_code != 200:
+                                material_impact = {
+                                    "error": f"poll returned HTTP {poll_resp.status_code}",
+                                    "detail": poll_resp.text,
+                                }
+                                break
+                            poll_body = poll_resp.json()
+                            status = poll_body.get("status", "unknown")
+                            if status == "completed":
+                                material_impact = poll_body.get("result", {})
+                                break
+                            elif status == "failed":
+                                material_impact = {
+                                    "error": f"re-plan job failed: {poll_body.get('error', 'unknown')}",
+                                }
+                                break
+                            # still running — keep polling
+                        else:
+                            material_impact = {"error": f"re-plan timed out after {max_wait}s"}
         except Exception as exc:
             material_impact = {"error": f"allocator unavailable: {exc}"}
     else:

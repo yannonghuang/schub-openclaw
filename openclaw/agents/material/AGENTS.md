@@ -97,7 +97,13 @@ Call `material_engine` with a `payload` wrapper:
 ```
 `payload` must be a non-empty JSON object under exactly the key `payload`. If `material_engine` is unavailable, report it and stop.
 
-The engine runs synchronously and returns the full result directly (no job_id). The result includes a `material_impact` field with the supply details and a list of impacted committed demands. Use the result immediately before proceeding.
+The engine submits a re-plan job to the allocator and polls internally until complete, then returns the full result directly (no job_id exposed to you). The result includes a `material_impact` field with:
+- `baselinePlanRunId` — the last successful plan run used as baseline
+- `contingentPlanRunId` — the newly-created contingent plan run (what-if branch)
+- `impactedDemandCount` — number of demands that would degrade
+- `impacts` — per demand: `baselineCommittedQty`, `contingentCommittedQty`, `qtyDelta`, `status` ("newly_failed" | "qty_reduced")
+
+Use the result immediately before proceeding.
 
 ### Step 2 — Route to Order Agent
 
