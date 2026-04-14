@@ -99,10 +99,10 @@ exec curl -s -X POST http://switch-service:6000/publish \
 ```
 Replace RATING with the actual value from the result.
 
-- If `rating = "LOW"` or `rating = "MEDIUM"`: auto-approved — proceed directly to Step 3.
-- If `rating = "HIGH"` (or missing/unrecognised): send a HITL approval request email.
+- If `rating = "LOW"`: auto-approved — proceed directly to Step 3.
+- If `rating = "MEDIUM"` or `rating = "HIGH"` (or missing/unrecognised): send a HITL approval request email.
 
-**For HIGH**: use the `send_email` skill with `session_key` set to your session key. Compose the email:
+**For MEDIUM or HIGH**: use the `send_email` skill with `session_key` set to your session key. Compose the email:
 
 Demand summary: for each entry in `impacted_demands`, list: demand ID, customer, due date, baseline committed qty, contingent committed qty, shortfall, status (newly_failed / qty_reduced).
 
