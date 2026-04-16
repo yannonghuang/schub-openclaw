@@ -18,6 +18,43 @@
       "查看在制品队列状态"
     ]
   },
+  "trace": {
+    "material": {
+      "engineStarted": "物料引擎已启动",
+      "engineRunning": "正在运行物料影响分析...",
+      "engineComplete": "物料引擎完成 — 转交订单代理",
+      "orderSpawned": "订单代理已启动 — 等待审批...",
+      "orderApproved": "订单已批准 — 转交计划代理",
+      "planningSpawning": "正在启动计划代理...",
+      "complete": "物料工作流完成"
+    },
+    "order": {
+      "engineStarted": "订单引擎已启动",
+      "jobSubmitting": "正在提交订单任务到分析引擎...",
+      "jobQueued": "订单任务已排队 — 等待结果...",
+      "engineComplete": "订单引擎完成 — 评级：{{rating}}",
+      "composingApproval": "正在撰写审批请求邮件...",
+      "awaitingApproval": "审批邮件已发送 — 等待人工确认...",
+      "rejected": "订单已被人工拒绝 — 正在取消",
+      "resendingApproval": "人工需要更多时间 — 重新发送审批请求...",
+      "approved": "订单已批准 — 正在发送通知",
+      "sendingNotification": "正在向来源业务发送结果通知...",
+      "returningControl": "正在将控制权交还物料工作流...",
+      "complete": "订单工作流完成"
+    },
+    "planning": {
+      "assessmentStarted": "计划评估已开始",
+      "engineCalling": "正在调用计划引擎...",
+      "assessmentComplete": "计划评估完成 — 评级：{{rating}}",
+      "composingApproval": "正在撰写计划推广审批请求...",
+      "awaitingApproval": "审批邮件已发送 — 等待人工确认...",
+      "promoting": "计划推广已批准 — 正在推广应急计划",
+      "sendingNotification": "正在向来源业务发送计划推广结果...",
+      "rejected": "计划推广已被人工拒绝 — 正在取消",
+      "resendingApproval": "人工请求更多信息 — 重新发送详情...",
+      "complete": "计划工作流完成"
+    }
+  },
   "run": {
     "title": "助手运行",
     "working": "助手处理中...",

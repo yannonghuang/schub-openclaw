@@ -95,7 +95,7 @@ Publish a trace event with the rating:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Planning assessment complete — rating: RATING\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.assessmentComplete\", \"params\": {\"rating\": \"RATING\"}, \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 Replace RATING with the actual value from the result.
 

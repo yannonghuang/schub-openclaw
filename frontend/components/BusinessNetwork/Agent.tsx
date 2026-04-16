@@ -14,6 +14,7 @@ import { SuggestionItem, type Suggestion } from "./SuggestionItem";
 /* ------------------------------------------------------------------ */
 interface StepEvent {
   label: string;
+  params?: Record<string, string>;
   agent?: string;
   ts: number;
   level?: "major" | "detail" | "waiting";
@@ -42,7 +43,18 @@ function formatElapsed(ms: number): string {
 }
 
 function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowActive: boolean }) {
-  const { t } = useTranslation("agent");
+  const { t, i18n } = useTranslation("agent");
+
+  // Translate a step key if it looks like an i18n key (e.g. "trace.planning.assessmentStarted").
+  // Falls back to the raw string for legacy plain-text steps.
+  const translateStep = (label: string, params?: Record<string, string>): string => {
+    if (label.startsWith("trace.")) {
+      const result = t(label, params ?? {});
+      // next-i18next returns the key itself when not found — show as-is rather than a raw key
+      return result !== label ? result : label;
+    }
+    return label;
+  };
 
   if (steps.length === 0 && !workflowActive) return null;
 
@@ -88,7 +100,7 @@ function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowAct
           <div key={i} className={`flex items-center gap-2 ${isDetail ? "pl-3" : ""}`}>
             {indicator}
             <span className={`${isDetail ? "text-[11px]" : "text-xs"} ${labelClass} flex-1 min-w-0`}>
-              {s.agent ? `[${s.agent}] ` : ""}{s.label}
+              {s.agent ? `[${s.agent}] ` : ""}{translateStep(s.label, s.params)}
             </span>
             {elapsed && (
               <span className="text-[10px] text-gray-300 flex-shrink-0 tabular-nums font-mono">
@@ -221,6 +233,7 @@ export default function Agent({
         ...prev,
         {
           label: event.value.step,
+          params: event.value.params,
           agent: event.value.agent,
           ts: event.timestamp ?? Date.now(),
           level: event.value.level,

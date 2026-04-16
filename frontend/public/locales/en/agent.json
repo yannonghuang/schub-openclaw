@@ -18,6 +18,43 @@
       "WIP queue status"
     ]
   },
+  "trace": {
+    "material": {
+      "engineStarted": "Material engine started",
+      "engineRunning": "Running material impact analysis...",
+      "engineComplete": "Material engine complete — delegating to Order Agent",
+      "orderSpawned": "Order Agent spawned — awaiting approval...",
+      "orderApproved": "Order approved — delegating to Planning Agent",
+      "planningSpawning": "Preparing to spawn Planning Agent...",
+      "complete": "Material workflow complete"
+    },
+    "order": {
+      "engineStarted": "Order engine started",
+      "jobSubmitting": "Submitting order job to analysis engine...",
+      "jobQueued": "Order job queued — waiting for result...",
+      "engineComplete": "Order engine complete — rating: {{rating}}",
+      "composingApproval": "Composing approval request email...",
+      "awaitingApproval": "Approval email sent — awaiting human confirmation...",
+      "rejected": "Order rejected by human — cancelling",
+      "resendingApproval": "Human needs more time — resending approval request...",
+      "approved": "Order approved — sending notification",
+      "sendingNotification": "Sending result notification to source business...",
+      "returningControl": "Returning control to material workflow...",
+      "complete": "Order workflow complete"
+    },
+    "planning": {
+      "assessmentStarted": "Planning assessment started",
+      "engineCalling": "Calling planning engine...",
+      "assessmentComplete": "Planning assessment complete — rating: {{rating}}",
+      "composingApproval": "Composing plan promotion approval request...",
+      "awaitingApproval": "Approval email sent — awaiting human confirmation...",
+      "promoting": "Plan promotion approved — promoting contingent run",
+      "sendingNotification": "Sending plan promotion result to source business...",
+      "rejected": "Plan promotion rejected by human — cancelling",
+      "resendingApproval": "Human requested more info — resending with details...",
+      "complete": "Planning workflow complete"
+    }
+  },
   "run": {
     "title": "Agent Run",
     "working": "Agent is working...",

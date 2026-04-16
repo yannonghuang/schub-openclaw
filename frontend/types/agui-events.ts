@@ -28,7 +28,8 @@ export interface ToolCallEndEvent extends AGUIBaseEvent {
 // Emitted by agents via curl to show workflow progress.
 // ---------------------------------------------------------------------------
 export interface TraceEventValue {
-  step: string;
+  step: string;              // i18n key (e.g. "trace.planning.assessmentStarted") or legacy plain text
+  params?: Record<string, string>;  // interpolation values for keyed steps (e.g. {rating: "MEDIUM"})
   agent?: string;
   level: "major" | "detail" | "waiting";
   businessId: number;        // was: business_id
