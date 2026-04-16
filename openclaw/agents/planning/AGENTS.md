@@ -57,14 +57,14 @@ Publish a trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Planning assessment started\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.assessmentStarted\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Publish a detail trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Calling planning engine...\", \"agent\": \"planning\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.engineCalling\", \"agent\": \"planning\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Call `planning_engine` once with a `payload` wrapper:
@@ -114,12 +114,12 @@ Publish trace events:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Composing plan promotion approval request...\", \"agent\": \"planning\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.composingApproval\", \"agent\": \"planning\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Approval email sent — awaiting human confirmation...\", \"agent\": \"planning\", \"level\": \"waiting\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.awaitingApproval\", \"agent\": \"planning\", \"level\": \"waiting\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 End turn returning exactly: `{"outcome": "pending_approval", "session_key": "YOUR_SESSION_KEY"}`. Do NOT proceed to Step 3 or 4.
@@ -151,7 +151,7 @@ Publish a rejection trace:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Plan promotion rejected by human — cancelling\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.rejected\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 Send a rejection notification to the source business:
 - `LOCALE=en`: subject `"Supply Plan Promotion Result"`, body `"Supply plan promotion has been cancelled. The contingent plan will not be promoted. Impact rating: RATING. EXPLANATION."`
@@ -172,7 +172,7 @@ Publish a waiting trace:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Human requested more info — resending with details...\", \"agent\": \"planning\", \"level\": \"waiting\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.resendingApproval\", \"agent\": \"planning\", \"level\": \"waiting\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 Resend the approval email using the `send_email` skill with `session_key` set to YOUR current session key. Include your detailed answer in the email body, followed by the original approval request. Compose in the correct LOCALE.
 End turn returning: `{"outcome": "pending_approval_resent", "session_key": "YOUR_SESSION_KEY"}`. Do NOT proceed to Step 4.
@@ -183,7 +183,7 @@ Publish a trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Plan promotion approved — promoting contingent run\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.promoting\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Promote the contingent plan run (replace CASE_ID and CONTINGENT_PLAN_RUN_ID with actual values):
@@ -197,7 +197,7 @@ Publish a detail trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Sending plan promotion result to source business...\", \"agent\": \"planning\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.sendingNotification\", \"agent\": \"planning\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Send a notification email to the source business:
@@ -215,7 +215,7 @@ Publish a final trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"Planning workflow complete\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.complete\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 
 Clean up context file:
