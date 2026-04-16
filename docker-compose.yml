@@ -1,16 +1,25 @@
+# docker-compose.yml — BASE (shared across all environments)
+#
+# Do NOT use alone. Always combine with an environment layer:
+#   make dev    →  --env-file .env.dev  -f docker-compose.yml -f docker-compose.dev.yml
+#   make prod   →  --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml
+#
+# This file defines service shapes (ports, depends_on, healthchecks, shared env vars).
+# build:, image:, source mounts, and NODE_ENV are environment-specific and live in the layers above.
 
 services:
+
+  # ── Reverse proxy ────────────────────────────────────────────────────────────
   nginx:
     image: nginx:latest
     volumes:
       - ./nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - ./certs:/etc/nginx/certs:ro
     environment:
-      - FRONTEND_URL=${FRONTEND_URL:-https://localhost}
+      - FRONTEND_URL=${FRONTEND_URL}
       - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
     ports:
       - "443:443"
-    # Substitute env vars into the template, then start nginx
     command: >
       sh -c "envsubst '$$FRONTEND_URL $$OPENCLAW_TOKEN' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
     depends_on:
@@ -21,11 +30,12 @@ services:
       openclaw:
         condition: service_started
 
+  # ── Data stores ──────────────────────────────────────────────────────────────
   db:
     image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: schub
     volumes:
       - db-data:/var/lib/postgresql/data
@@ -40,8 +50,6 @@ services:
 
   redis:
     image: redis:7
-    ports:
-      - "6379:6379"
     healthcheck:
       test: redis-cli ping
       interval: 5s
@@ -55,15 +63,14 @@ services:
       --maxmemory-policy allkeys-lru
     volumes:
       - redis-data:/data
+    ports:
+      - "6379:6379"
 
+  # ── Application services ─────────────────────────────────────────────────────
   auth-service:
-    image: ${REGISTRY:-}schub-auth:${TAG:-latest}
-    build:
-      context: .
-      dockerfile: services/auth/Dockerfile
     environment:
-      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/schub
-      - SMTP_HOST=${SMTP_HOST:-smtp.mail.me.com}
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/schub
+      - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER}
       - SMTP_PASS=${SMTP_PASS}
@@ -74,21 +81,15 @@ services:
       - "4000:4000"
 
   openclaw:
-    image: ${REGISTRY:-}schub-openclaw:${TAG:-latest}
-    build:
-      context: ./openclaw
-      dockerfile: Dockerfile
     ports:
       - "18789:18789"
-    volumes:
-      - ./openclaw:/home/node/.openclaw
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - IMAP_HOST=${IMAP_HOST:-imap.gmail.com}
+      - IMAP_HOST=${IMAP_HOST}
       - IMAP_PORT=${IMAP_PORT:-993}
       - IMAP_USER=${IMAP_USER}
       - IMAP_PASS=${IMAP_PASS}
-      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER}
       - SMTP_PASS=${SMTP_PASS}
@@ -107,12 +108,8 @@ services:
       - auth-service
 
   adaptor:
-    image: ${REGISTRY:-}schub-adaptor:${TAG:-latest}
-    build:
-      context: .
-      dockerfile: services/adaptor/Dockerfile
     environment:
-      - IMAP_HOST=${IMAP_HOST:-imap.mail.me.com}
+      - IMAP_HOST=${IMAP_HOST}
       - IMAP_PORT=${IMAP_PORT:-993}
       - IMAP_USER=${IMAP_USER}
       - IMAP_PASS=${IMAP_PASS}
@@ -131,10 +128,6 @@ services:
     restart: unless-stopped
 
   switch-service:
-    image: ${REGISTRY:-}schub-switch:${TAG:-latest}
-    build:
-      context: .
-      dockerfile: services/switch/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379
       - OPENCLAW_URL=http://openclaw:18789
@@ -146,14 +139,9 @@ services:
       - "6000:6000"
 
   audit-service:
-    image: ${REGISTRY:-}schub-audit:${TAG:-latest}
-    build:
-      context: .
-      dockerfile: services/audit/Dockerfile
-      target: prod
     environment:
       - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/schub
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@db:5432/schub
       - PYTHONPATH=/app:/auth_service
     depends_on:
       - redis
@@ -162,12 +150,7 @@ services:
       - "9000:9000"
 
   frontend-service:
-    image: ${REGISTRY:-}schub-frontend:${TAG:-latest}
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
     environment:
-      - NODE_ENV=production
       - REDIS_URL=redis://redis:6379
       - TRANSCRIPT_CHANNEL=transcript_channel
       - OPENAI_SERVICE_URL=http://openai-service:4020
@@ -184,86 +167,62 @@ services:
       start_period: 10s
 
   mcp-server:
-      image: ${REGISTRY:-}schub-mcp:${TAG:-latest}
-      build:
-          context: ./mcp-server
-          dockerfile: dockerfile
-          target: dev
-      ports:
-          - "9500:9500"
-      environment:
-          MCP_API_KEY: ${MCP_API_KEY:-}
-          ALLOCATOR_BACKEND_URL: http://allocator-backend:8000
-      healthcheck:
-          test: ["CMD", "curl", "-f", "http://localhost:9500/health"]
-          interval: 5s
-          timeout: 3s
-          retries: 5
-          start_period: 10s
+    ports:
+      - "9500:9500"
+    environment:
+      MCP_API_KEY: ${MCP_API_KEY:-}
+      ALLOCATOR_BACKEND_URL: http://allocator-backend:8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9500/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
+  # ── Admin ────────────────────────────────────────────────────────────────────
   pgadmin:
     image: docker.io/dpage/pgadmin4:latest
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@example.com
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-securepassword}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
     ports:
-      - 10000:80
+      - "10000:80"
     volumes:
       - pgadmin-data:/var/lib/pgadmin/
     depends_on:
       - db
 
   # ── Allocator ────────────────────────────────────────────────────────────────
-  # One-shot service: creates the `allocator` DB on the shared PG instance if it
-  # doesn't already exist.  Runs before allocator-backend on every `compose up`.
   db-init-allocator:
     image: pgvector/pgvector:pg17
     entrypoint: ["sh", "-c", "psql -h db -U postgres -c 'CREATE DATABASE allocator' || true"]
     environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
     depends_on:
       db:
         condition: service_healthy
     restart: "no"
 
   allocator-backend:
-    image: ${REGISTRY:-}schub-allocator-backend:${TAG:-latest}
-    build:
-      context: ../allocator_inno_kotlin/backend-kotlin
-      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/allocator
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/allocator
       CSV_ROOT_PATH: /data/csv
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-    volumes:
-      - ../allocator_inno_kotlin/csv:/data/csv:ro
     depends_on:
       db-init-allocator:
         condition: service_completed_successfully
 
-  # Allocator Next.js UI — accessible at http(s)://SERVER_HOST:3001
   allocator-frontend:
-    image: ${REGISTRY:-}schub-allocator-frontend:${TAG:-latest}
-    build:
-      context: ../allocator_inno_kotlin/frontend
-      dockerfile: Dockerfile        # production build
     ports:
       - "3001:3000"
     environment:
       API_BACKEND_URL: http://allocator-backend:8000
-      NODE_ENV: production
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     depends_on:
       - allocator-backend
 
 volumes:
-  db-data:
-    external: true
-    name: schub_db-data
   redis-data:
-  pgadmin-data:
-    external: true
-    name: schub_pgadmin-data
   adaptor-data:

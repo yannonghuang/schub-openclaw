@@ -4,10 +4,10 @@ Deploys the full schub-openclaw stack (nginx, PostgreSQL, Redis, auth-service, f
 
 Two deployment modes are supported:
 
-| Mode | When to use | Source code on VM? |
-|------|-------------|-------------------|
-| **Source-based** (Steps 1–9 below) | Dev / first-time setup | Yes — `docker compose build` runs on the VM |
-| **Image-based** (see [Image-Based Deployment](#image-based-deployment-no-source-code-on-vm)) | Production / repeatable deploys | No — pull pre-built images from a registry |
+| Mode | When to use | Source code on VM? | Command |
+|------|-------------|-------------------|---------|
+| **Source-based** (Steps 1–8 below) | Dev / first-time setup | Yes — build runs on the VM | `make dev-build` |
+| **Image-based** (see [Image-Based Deployment](#image-based-deployment-no-source-code-on-vm)) | Production / repeatable deploys | No — pull pre-built images | `make prod` |
 
 ---
 
@@ -22,7 +22,7 @@ sudo usermod -aG docker $USER
 # Log out and back in so the group takes effect
 
 # mkcert (self-signed TLS)
-sudo apt install -y libnss3-tools curl
+sudo apt install -y libnss3-tools curl make
 curl -L https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-linux-amd64 \
   -o /usr/local/bin/mkcert && chmod +x /usr/local/bin/mkcert
 mkcert -install
@@ -74,11 +74,11 @@ mkcert -install          # macOS / Linux — installs into browser/system trust 
 
 ## Step 3 — Configure Environment
 
-```bash
-cp .env.example .env
-```
+`.env.dev` ships with sensible defaults for local/dev use. Edit it and fill in at minimum:
 
-Edit `.env` and fill in at minimum:
+```bash
+nano .env.dev
+```
 
 | Variable | Description |
 |----------|-------------|
@@ -91,43 +91,44 @@ Edit `.env` and fill in at minimum:
 
 ---
 
-## Step 4 — Create External Docker Volumes
-
-These are declared `external: true` in `docker-compose.yml` and must exist before the first run.
+## Step 4 — Create Docker Volumes
 
 ```bash
-docker volume create schub_db-data
-docker volume create schub_pgadmin-data
+make volumes-dev
 ```
+
+This creates `schub_db-data` and `schub_pgadmin-data` as local named volumes.
 
 ---
 
 ## Step 5 — Build and Start
 
 ```bash
-docker compose pull          # pull base images (nginx, postgres, redis, pgadmin)
-docker compose build         # build all custom service images
-docker compose up -d         # start everything in the background
-docker compose ps            # verify all services show "running" or "healthy"
+make dev-build       # build all images from source and start in foreground
+# or
+make dev-d           # start without rebuilding (detached)
+```
+
+Check that all services are running:
+
+```bash
+make ps
 ```
 
 To tail logs during startup:
 
 ```bash
-docker compose logs -f
+make logs
 ```
 
 ---
 
 ## Step 6 — Seed the Database
 
-Wait for `auth-service` to be running, then seed the `schub` database:
+Wait for `auth-service` to be healthy, then:
 
 ```bash
-docker compose exec auth-service python seed_db.py
-docker compose exec auth-service python seed_materials.py
-docker compose exec auth-service python seed_locations.py
-docker compose exec auth-service python seed_transportations.py
+make seed-db
 ```
 
 The `allocator` database is created automatically by `db-init-allocator` and schema-migrated by the Kotlin backend on startup. Load CSV data via the API:
@@ -161,7 +162,7 @@ sudo ufw enable
 
 | Check | Command |
 |-------|---------|
-| All services healthy | `docker compose ps` |
+| All services healthy | `make ps` |
 | Main UI | Open `https://$SERVER_HOST` in a browser |
 | Allocator UI | Open `https://$SERVER_HOST:3001` |
 | Auth API | `curl -sk https://$SERVER_HOST/auth/health` |
@@ -172,12 +173,11 @@ sudo ufw enable
 
 ---
 
-## Updating
+## Updating (source-based)
 
 ```bash
 git pull
-docker compose build
-docker compose up -d        # rolling restart — running containers replaced one by one
+make dev-build      # rebuild changed images and restart
 ```
 
 ---
@@ -195,7 +195,7 @@ cd schub-openclaw
 export REGISTRY=ghcr.io/yourorg/    # trailing slash required
 export TAG=1.0.0                     # or "latest"
 
-./scripts/build-push.sh
+make push
 ```
 
 To use a self-hosted private registry on the VM itself:
@@ -206,64 +206,74 @@ docker run -d -p 5000:5000 --restart=always --name registry registry:2
 # On the dev machine
 export REGISTRY=192.168.x.x:5000/
 export TAG=latest
-./scripts/build-push.sh
+make push
 ```
 
 ### On the VM (no source code needed)
 
 Copy only these files to the VM:
+
 ```
+docker-compose.yml
 docker-compose.prod.yml
 nginx.conf.template
-.env                        (fill in from .env.example)
-certs/                      (TLS cert — generate with mkcert as in Step 2 above)
+Makefile
+.env.prod               (fill in from .env.example — see below)
+certs/                  (TLS cert — generate with mkcert as in Step 2 above)
+```
+
+Create `.env.prod` from the template:
+
+```bash
+cp .env.example .env.prod
+nano .env.prod
+```
+
+Fill in all values, including:
+
+```dotenv
+FRONTEND_URL=https://192.168.x.x     # VM's LAN IP or hostname
+REGISTRY=ghcr.io/yourorg/            # same registry used when building
+TAG=1.0.0
+ALLOCATOR_CSV_PATH=/opt/allocator-csv
+OPENCLAW_TOKEN=<generate with openssl rand -hex 24>
+ANTHROPIC_API_KEY=<your key>
+# ... SMTP, IMAP, POSTGRES_PASSWORD, etc.
 ```
 
 Copy your allocator CSV data:
 ```bash
 sudo mkdir -p /opt/allocator-csv
 sudo cp /path/to/your/csv/*.csv /opt/allocator-csv/
-# Or set ALLOCATOR_CSV_PATH in .env to point to wherever your CSVs live
-```
-
-Add to `.env`:
-```dotenv
-REGISTRY=ghcr.io/yourorg/   # same registry used when building
-TAG=1.0.0
-ALLOCATOR_CSV_PATH=/opt/allocator-csv
+# Or set ALLOCATOR_CSV_PATH in .env.prod to wherever your CSVs live
 ```
 
 Create volumes (first time only):
 ```bash
-docker volume create schub_db-data
-docker volume create schub_pgadmin-data
-docker volume create schub_openclaw-workspace
+make volumes-prod
 ```
 
 Pull images and start:
 ```bash
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
-docker compose -f docker-compose.prod.yml ps
+make prod-pull
+make ps
 ```
 
-Seed the database (first time only — same as Step 6 above):
+Seed the database (first time only):
 ```bash
-docker compose -f docker-compose.prod.yml exec auth-service python seed_db.py
-docker compose -f docker-compose.prod.yml exec auth-service python seed_materials.py
-docker compose -f docker-compose.prod.yml exec auth-service python seed_locations.py
-docker compose -f docker-compose.prod.yml exec auth-service python seed_transportations.py
+make seed-db
 ```
 
 ### Updating to a new release
 
+On the build machine:
 ```bash
-# On build machine:
-TAG=1.1.0 REGISTRY=ghcr.io/yourorg/ ./scripts/build-push.sh
+TAG=1.1.0 REGISTRY=ghcr.io/yourorg/ make push
+```
 
-# On VM:
-TAG=1.1.0 docker compose -f docker-compose.prod.yml pull
-TAG=1.1.0 docker compose -f docker-compose.prod.yml up -d
+On the VM — update `.env.prod` to set `TAG=1.1.0`, then:
+```bash
+make prod-pull
 ```
 
 > **Note:** The `openclaw-init` service re-copies agent instructions (AGENTS.md) and skills from the new image into the workspace volume on every `up`, so agent updates are picked up automatically. Runtime state (credentials, memory, sessions) in the volume is preserved.

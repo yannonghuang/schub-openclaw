@@ -1,0 +1,92 @@
+# docker-compose.dev.yml — DEV layer
+#
+# Adds: build contexts, source mounts (hot-reload), dev commands, dev env vars.
+# Usage: docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+      target: dev
+    volumes:
+      - ./services/auth:/app
+      - ./shared:/app/shared
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "4000", "--reload"]
+
+  openclaw:
+    build:
+      context: ./openclaw
+      dockerfile: Dockerfile
+    volumes:
+      - ./openclaw:/home/node/.openclaw
+
+  adaptor:
+    build:
+      context: .
+      dockerfile: services/adaptor/Dockerfile
+
+  switch-service:
+    build:
+      context: .
+      dockerfile: services/switch/Dockerfile
+      target: dev
+    volumes:
+      - ./services/switch:/app
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "6000", "--reload"]
+
+  audit-service:
+    build:
+      context: .
+      dockerfile: services/audit/Dockerfile
+      target: dev
+    volumes:
+      - ./services/audit:/app
+      - ./services/auth/data:/app/data
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9000", "--reload"]
+
+  frontend-service:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - WATCHPACK_POLLING=true
+    command: ["npm", "run", "dev"]
+
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: dockerfile
+      target: dev
+
+  allocator-backend:
+    build:
+      context: ../allocator_inno_kotlin/backend-kotlin
+      dockerfile: Dockerfile
+    volumes:
+      - ../allocator_inno_kotlin/csv:/data/csv:ro
+
+  allocator-frontend:
+    build:
+      context: ../allocator_inno_kotlin/frontend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ../allocator_inno_kotlin/frontend:/app
+      - allocator_frontend_node_modules:/app/node_modules
+    environment:
+      - NODE_ENV=development
+      - WATCHPACK_POLLING=true
+    command: npm run dev
+
+volumes:
+  db-data:
+  pgadmin-data:
+  frontend_node_modules:
+  allocator_frontend_node_modules:
