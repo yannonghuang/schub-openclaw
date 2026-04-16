@@ -3,10 +3,16 @@ services:
   nginx:
     image: nginx:latest
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./certs:/etc/nginx/certs:ro      # your mkcert-generated certs
+      - ./nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - ./certs:/etc/nginx/certs:ro
+    environment:
+      - FRONTEND_URL=${FRONTEND_URL:-https://localhost}
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
     ports:
       - "443:443"
+    # Substitute env vars into the template, then start nginx
+    command: >
+      sh -c "envsubst '$$FRONTEND_URL $$OPENCLAW_TOKEN' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
     depends_on:
       frontend-service:
         condition: service_healthy
@@ -16,10 +22,10 @@ services:
         condition: service_started
 
   db:
-    image: pgvector/pgvector:pg17 #postgres:15
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: schub
     volumes:
       - db-data:/var/lib/postgresql/data
@@ -46,22 +52,21 @@ services:
       --appendonly yes
       --appendfsync everysec
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru  
+      --maxmemory-policy allkeys-lru
     volumes:
       - redis-data:/data
-      
+
   auth-service:
     build:
       context: .
       dockerfile: services/auth/Dockerfile
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/schub
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/schub
       - SMTP_HOST=${SMTP_HOST:-smtp.mail.me.com}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER}
       - SMTP_PASS=${SMTP_PASS}
       - SMTP_FROM=${SMTP_FROM}
-#      - NEXT_PUBLIC_FRONTEND_URL=https://192.168.0.101
     depends_on:
       - db
     ports:
@@ -136,25 +141,13 @@ services:
     ports:
       - "6000:6000"
 
-  #geopol-service:
-  #  build:
-  #    context: .
-  #    dockerfile: services/geopol/Dockerfile
-  #  environment:
-  #    - REDIS_URL=redis://redis:6379
-  #    - GEOPOL_INBOUND_CHANNEL=business:-1:channel
-  #  depends_on:
-  #    - redis
-  #  ports:
-  #    - "8500:8500"
-
   audit-service:
     build:
       context: .
       dockerfile: services/audit/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/schub
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/schub
       - PYTHONPATH=/app:/auth_service
     volumes:
       - ./services/audit:/app
@@ -170,16 +163,13 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - REDIS_URL=redis://redis:6379
       - TRANSCRIPT_CHANNEL=transcript_channel
       - OPENAI_SERVICE_URL=http://openai-service:4020
       - SYSTEM_NODE=-1
       - EMAIL_NODE=-2
       - ALLOCATOR_BACKEND_URL=http://allocator-backend:8000
-      #- NEXT_PUBLIC_FRONTEND_URL=https://localhost
-      #- NEXT_PUBLIC_FRONTEND_URL=https://192.168.86.175
-    # No host port needed — nginx proxies to this service internally
     depends_on:
       - auth-service
     healthcheck:
@@ -188,7 +178,7 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
-      
+
   mcp-server:
       image: localhost:5001/mcp-server:latest
       build:
@@ -198,8 +188,6 @@ services:
       ports:
           - "9500:9500"
       environment:
-          # Leave MCP_API_KEY unset here for dev (no auth enforcement).
-          # Set it in .env or as a real env var in prod to enable the key check.
           MCP_API_KEY: ${MCP_API_KEY:-}
           ALLOCATOR_BACKEND_URL: http://allocator-backend:8000
       healthcheck:
@@ -208,11 +196,12 @@ services:
           timeout: 3s
           retries: 5
           start_period: 10s
+
   pgadmin:
     image: docker.io/dpage/pgadmin4:latest
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@example.com
-      PGADMIN_DEFAULT_PASSWORD: securepassword
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-securepassword}
     ports:
       - 10000:80
     volumes:
@@ -227,7 +216,7 @@ services:
     image: pgvector/pgvector:pg17
     entrypoint: ["sh", "-c", "psql -h db -U postgres -c 'CREATE DATABASE allocator' || true"]
     environment:
-      PGPASSWORD: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
     depends_on:
       db:
         condition: service_healthy
@@ -240,7 +229,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/allocator
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/allocator
       CSV_ROOT_PATH: /data/csv
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
@@ -249,22 +238,17 @@ services:
       db-init-allocator:
         condition: service_completed_successfully
 
-  # Allocator Next.js UI — accessible at http://localhost:3001
-  # (port 3000 is taken by frontend-service)
+  # Allocator Next.js UI — accessible at http(s)://SERVER_HOST:3001
   allocator-frontend:
     build:
       context: ../allocator_inno_kotlin/frontend
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile        # production build
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       API_BACKEND_URL: http://allocator-backend:8000
-      WATCHPACK_POLLING: "true"
+      NODE_ENV: production
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-    volumes:
-      - ../allocator_inno_kotlin/frontend:/app
-      - allocator_frontend_node_modules:/app/node_modules
-    command: npm run dev
     depends_on:
       - allocator-backend
 
@@ -277,4 +261,3 @@ volumes:
     external: true
     name: schub_pgadmin-data
   adaptor-data:
-  allocator_frontend_node_modules:
