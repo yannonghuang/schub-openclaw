@@ -104,7 +104,7 @@ Replace RATING with the actual value from the result.
 
 **For MEDIUM or HIGH**: use the `send_email` skill with `session_key` set to your session key. Compose the email:
 
-Demand summary: for each entry in `impacted_demands`, list: demand ID, customer, due date, baseline committed qty, contingent committed qty, shortfall, status (newly_failed / qty_reduced).
+Demand summary: for each entry in `impacts` (from assessment result), list: demand ID, baseline committed qty, contingent committed qty, shortfall (baselineCommittedQty - contingentCommittedQty), status (newly_failed / qty_reduced). If `impacts` is unavailable, summarise using `impactedDemandCount` and the explanation text.
 
 - `LOCALE=en`: subject `"Supply Plan Promotion Request"`, body (English):
   `"A supply plan change requires your approval before it can be promoted.\n\nSupply: SUPPLY_ID\nChange: DELAY/QTY description\nImpact rating: HIGH\n\nEXPLANATION\n\nImpacted orders:\nDEMAND_SUMMARY\n\nReply 'Approved' to promote this plan, 'Rejected' to cancel, or ask any questions about the impacted orders."`
