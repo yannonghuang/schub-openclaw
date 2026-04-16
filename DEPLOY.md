@@ -2,6 +2,13 @@
 
 Deploys the full schub-openclaw stack (nginx, PostgreSQL, Redis, auth-service, frontend, openclaw agents, switch-service, adaptor, audit-service, mcp-server, allocator-backend, allocator-frontend) onto a single Linux VM using Docker Compose and self-signed TLS.
 
+Two deployment modes are supported:
+
+| Mode | When to use | Source code on VM? |
+|------|-------------|-------------------|
+| **Source-based** (Steps 1–9 below) | Dev / first-time setup | Yes — `docker compose build` runs on the VM |
+| **Image-based** (see [Image-Based Deployment](#image-based-deployment-no-source-code-on-vm)) | Production / repeatable deploys | No — pull pre-built images from a registry |
+
 ---
 
 ## Prerequisites
@@ -172,6 +179,94 @@ git pull
 docker compose build
 docker compose up -d        # rolling restart — running containers replaced one by one
 ```
+
+---
+
+---
+
+## Image-Based Deployment (no source code on VM)
+
+### On the build machine (your dev machine, run once per release)
+
+```bash
+cd schub-openclaw
+
+# Set your registry (e.g. Docker Hub, GHCR, or a self-hosted registry)
+export REGISTRY=ghcr.io/yourorg/    # trailing slash required
+export TAG=1.0.0                     # or "latest"
+
+./scripts/build-push.sh
+```
+
+To use a self-hosted private registry on the VM itself:
+```bash
+# On the VM — start a local registry
+docker run -d -p 5000:5000 --restart=always --name registry registry:2
+
+# On the dev machine
+export REGISTRY=192.168.x.x:5000/
+export TAG=latest
+./scripts/build-push.sh
+```
+
+### On the VM (no source code needed)
+
+Copy only these files to the VM:
+```
+docker-compose.prod.yml
+nginx.conf.template
+.env                        (fill in from .env.example)
+certs/                      (TLS cert — generate with mkcert as in Step 2 above)
+```
+
+Copy your allocator CSV data:
+```bash
+sudo mkdir -p /opt/allocator-csv
+sudo cp /path/to/your/csv/*.csv /opt/allocator-csv/
+# Or set ALLOCATOR_CSV_PATH in .env to point to wherever your CSVs live
+```
+
+Add to `.env`:
+```dotenv
+REGISTRY=ghcr.io/yourorg/   # same registry used when building
+TAG=1.0.0
+ALLOCATOR_CSV_PATH=/opt/allocator-csv
+```
+
+Create volumes (first time only):
+```bash
+docker volume create schub_db-data
+docker volume create schub_pgadmin-data
+docker volume create schub_openclaw-workspace
+```
+
+Pull images and start:
+```bash
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml ps
+```
+
+Seed the database (first time only — same as Step 6 above):
+```bash
+docker compose -f docker-compose.prod.yml exec auth-service python seed_db.py
+docker compose -f docker-compose.prod.yml exec auth-service python seed_materials.py
+docker compose -f docker-compose.prod.yml exec auth-service python seed_locations.py
+docker compose -f docker-compose.prod.yml exec auth-service python seed_transportations.py
+```
+
+### Updating to a new release
+
+```bash
+# On build machine:
+TAG=1.1.0 REGISTRY=ghcr.io/yourorg/ ./scripts/build-push.sh
+
+# On VM:
+TAG=1.1.0 docker compose -f docker-compose.prod.yml pull
+TAG=1.1.0 docker compose -f docker-compose.prod.yml up -d
+```
+
+> **Note:** The `openclaw-init` service re-copies agent instructions (AGENTS.md) and skills from the new image into the workspace volume on every `up`, so agent updates are picked up automatically. Runtime state (credentials, memory, sessions) in the volume is preserved.
 
 ---
 

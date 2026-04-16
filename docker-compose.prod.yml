@@ -1,45 +1,286 @@
+# docker-compose.prod.yml — image-only deployment (no source code on host)
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Required in .env:
+#   REGISTRY        — registry prefix, e.g. "ghcr.io/yourorg/" (with trailing slash)
+#                     leave empty to use plain image names
+#   TAG             — image tag, e.g. "1.2.0" or "latest"
+#   FRONTEND_URL, OPENCLAW_TOKEN, ANTHROPIC_API_KEY, SMTP_*, IMAP_*, ...
+#
+# Files needed on the VM (no source code required):
+#   docker-compose.prod.yml   (this file)
+#   .env                      (secrets)
+#   nginx.conf.template       (copy from repo root)
+#   certs/server.pem          (mkcert TLS cert)
+#   certs/server-key.pem      (mkcert TLS key)
+#   /opt/allocator-csv/       (CSV data files — set ALLOCATOR_CSV_PATH to override path)
+
 services:
+
+  # ── Init: populate openclaw workspace volume from image ─────────────────────
+  # Copies agent instructions and skills from the image into the named volume on
+  # every deploy, refreshing AGENTS.md and skills without wiping runtime state
+  # (credentials, sessions, memory stay intact in the volume).
+  openclaw-init:
+    image: ${REGISTRY:-}schub-openclaw:${TAG:-latest}
+    user: root
+    volumes:
+      - openclaw-workspace:/workspace
+    entrypoint: >
+      sh -c "
+        cp -r /home/node/.openclaw-defaults/agents        /workspace/ &&
+        cp -r /home/node/.openclaw-defaults/skills        /workspace/ &&
+        cp -f /home/node/.openclaw-defaults/openclaw.json.template /workspace/ &&
+        cp -r /home/node/.openclaw-defaults/canvas        /workspace/ &&
+        cp -r /home/node/.openclaw-defaults/subagents     /workspace/ &&
+        cp -r /home/node/.openclaw-defaults/telegram      /workspace/ &&
+        chown -R 1000:1000 /workspace &&
+        echo 'openclaw workspace ready'
+      "
+    restart: "no"
+
+  # ── Infrastructure ───────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:latest
+    volumes:
+      - ./nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - ./certs:/etc/nginx/certs:ro
+    environment:
+      - FRONTEND_URL=${FRONTEND_URL:-https://localhost}
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
+    ports:
+      - "443:443"
+    command: >
+      sh -c "envsubst '$$FRONTEND_URL $$OPENCLAW_TOKEN' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
+    depends_on:
+      frontend-service:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+      openclaw:
+        condition: service_started
+
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: schub
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: pg_isready -U postgres
+      start_period: 10s
+      timeout: 1s
+      retries: 5
+      interval: 5s
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: redis-cli ping
+      interval: 5s
+      timeout: 1s
+      retries: 5
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+
+  # ── Application services ─────────────────────────────────────────────────────
   auth-service:
-    build:
-      target: prod
-    image: schub-auth:prod
+    image: ${REGISTRY:-}schub-auth:${TAG:-latest}
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/schub
+      - SMTP_HOST=${SMTP_HOST:-smtp.mail.me.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - SMTP_FROM=${SMTP_FROM}
+    depends_on:
+      - db
+    ports:
+      - "4000:4000"
 
-  transcript-service:
-    build:
-      target: prod
-    image: schub-transcript:prod
+  openclaw:
+    image: ${REGISTRY:-}schub-openclaw:${TAG:-latest}
+    ports:
+      - "18789:18789"
+    volumes:
+      - openclaw-workspace:/home/node/.openclaw
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - IMAP_HOST=${IMAP_HOST:-imap.gmail.com}
+      - IMAP_PORT=${IMAP_PORT:-993}
+      - IMAP_USER=${IMAP_USER}
+      - IMAP_PASS=${IMAP_PASS}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - MCP_API_KEY=${MCP_API_KEY:-}
+      - BACKEND_URL=http://auth-service:4000
+      - OPENCLAW_URL=http://openclaw:18789
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+      mcp-server:
+        condition: service_started
+      auth-service:
+        condition: service_started
+      openclaw-init:
+        condition: service_completed_successfully
 
-  streaming-service:
-    build:
-      target: prod
-    image: schub-streaming:prod
+  adaptor:
+    image: ${REGISTRY:-}schub-adaptor:${TAG:-latest}
+    environment:
+      - IMAP_HOST=${IMAP_HOST:-imap.mail.me.com}
+      - IMAP_PORT=${IMAP_PORT:-993}
+      - IMAP_USER=${IMAP_USER}
+      - IMAP_PASS=${IMAP_PASS}
+      - POLL_INTERVAL=${ADAPTOR_POLL_INTERVAL:-30}
+      - BACKEND_URL=http://auth-service:4000
+      - OPENCLAW_URL=http://openclaw:18789
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
+      - SWITCH_URL=http://switch-service:6000/publish
+      - SEEN_FILE=/data/adaptor_seen.json
+    volumes:
+      - adaptor-data:/data
+    depends_on:
+      - auth-service
+      - openclaw
+      - switch-service
+    restart: unless-stopped
+
+  switch-service:
+    image: ${REGISTRY:-}schub-switch:${TAG:-latest}
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - OPENCLAW_URL=http://openclaw:18789
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
+    depends_on:
+      - redis
+      - openclaw
+    ports:
+      - "6000:6000"
+
+  audit-service:
+    image: ${REGISTRY:-}schub-audit:${TAG:-latest}
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/schub
+      - PYTHONPATH=/app:/auth_service
+    depends_on:
+      - redis
+      - db
+    ports:
+      - "9000:9000"
 
   frontend-service:
-    build:
-      target: prod
-    image: schub-frontend:prod
+    image: ${REGISTRY:-}schub-frontend:${TAG:-latest}
+    environment:
+      - NODE_ENV=production
+      - REDIS_URL=redis://redis:6379
+      - TRANSCRIPT_CHANNEL=transcript_channel
+      - SYSTEM_NODE=-1
+      - EMAIL_NODE=-2
+      - ALLOCATOR_BACKEND_URL=http://allocator-backend:8000
+    depends_on:
+      - auth-service
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 
-  signaling-service:
-    build:
-      target: prod
-    image: schub-signaling:prod
+  mcp-server:
+    image: ${REGISTRY:-}schub-mcp:${TAG:-latest}
+    ports:
+      - "9500:9500"
+    environment:
+      MCP_API_KEY: ${MCP_API_KEY:-}
+      ALLOCATOR_BACKEND_URL: http://allocator-backend:8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9500/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
-  openai-service:
-    build:
-      target: prod
-    image: schub-openai:prod
+  pgadmin:
+    image: docker.io/dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-securepassword}
+    ports:
+      - 10000:80
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin/
+    depends_on:
+      - db
 
-  redis-proxy:
-    build:
-      target: prod
-    image: schub-proxy:prod
+  # ── Allocator ────────────────────────────────────────────────────────────────
+  db-init-allocator:
+    image: pgvector/pgvector:pg17
+    entrypoint: ["sh", "-c", "psql -h db -U postgres -c 'CREATE DATABASE allocator' || true"]
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
 
-  #geopol-service:
-  #  build:
-  #    target: prod
-  #  image: schub-geopol:prod
+  allocator-backend:
+    image: ${REGISTRY:-}schub-allocator-backend:${TAG:-latest}
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/allocator
+      CSV_ROOT_PATH: /data/csv
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      # Place CSV files at ALLOCATOR_CSV_PATH on the host (defaults to /opt/allocator-csv)
+      - ${ALLOCATOR_CSV_PATH:-/opt/allocator-csv}:/data/csv:ro
+    depends_on:
+      db-init-allocator:
+        condition: service_completed_successfully
 
-  adaptor-service:
-    build:
-      target: prod
-    image: schub-adaptor:prod
+  allocator-frontend:
+    image: ${REGISTRY:-}schub-allocator-frontend:${TAG:-latest}
+    ports:
+      - "3001:3000"
+    environment:
+      API_BACKEND_URL: http://allocator-backend:8000
+      NODE_ENV: production
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      - allocator-backend
+
+volumes:
+  db-data:
+    external: true
+    name: schub_db-data
+  redis-data:
+  pgadmin-data:
+    external: true
+    name: schub_pgadmin-data
+  adaptor-data:
+  openclaw-workspace:
+    external: true
+    name: schub_openclaw-workspace

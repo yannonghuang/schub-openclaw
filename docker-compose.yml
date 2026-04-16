@@ -57,6 +57,7 @@ services:
       - redis-data:/data
 
   auth-service:
+    image: ${REGISTRY:-}schub-auth:${TAG:-latest}
     build:
       context: .
       dockerfile: services/auth/Dockerfile
@@ -73,6 +74,7 @@ services:
       - "4000:4000"
 
   openclaw:
+    image: ${REGISTRY:-}schub-openclaw:${TAG:-latest}
     build:
       context: ./openclaw
       dockerfile: Dockerfile
@@ -105,6 +107,7 @@ services:
       - auth-service
 
   adaptor:
+    image: ${REGISTRY:-}schub-adaptor:${TAG:-latest}
     build:
       context: .
       dockerfile: services/adaptor/Dockerfile
@@ -128,6 +131,7 @@ services:
     restart: unless-stopped
 
   switch-service:
+    image: ${REGISTRY:-}schub-switch:${TAG:-latest}
     build:
       context: .
       dockerfile: services/switch/Dockerfile
@@ -142,16 +146,15 @@ services:
       - "6000:6000"
 
   audit-service:
+    image: ${REGISTRY:-}schub-audit:${TAG:-latest}
     build:
       context: .
       dockerfile: services/audit/Dockerfile
+      target: prod
     environment:
       - REDIS_URL=redis://redis:6379
       - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/schub
       - PYTHONPATH=/app:/auth_service
-    volumes:
-      - ./services/audit:/app
-      - ./services/auth:/auth_service
     depends_on:
       - redis
       - db
@@ -159,6 +162,7 @@ services:
       - "9000:9000"
 
   frontend-service:
+    image: ${REGISTRY:-}schub-frontend:${TAG:-latest}
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -180,7 +184,7 @@ services:
       start_period: 10s
 
   mcp-server:
-      image: localhost:5001/mcp-server:latest
+      image: ${REGISTRY:-}schub-mcp:${TAG:-latest}
       build:
           context: ./mcp-server
           dockerfile: dockerfile
@@ -223,6 +227,7 @@ services:
     restart: "no"
 
   allocator-backend:
+    image: ${REGISTRY:-}schub-allocator-backend:${TAG:-latest}
     build:
       context: ../allocator_inno_kotlin/backend-kotlin
       dockerfile: Dockerfile
@@ -240,6 +245,7 @@ services:
 
   # Allocator Next.js UI — accessible at http(s)://SERVER_HOST:3001
   allocator-frontend:
+    image: ${REGISTRY:-}schub-allocator-frontend:${TAG:-latest}
     build:
       context: ../allocator_inno_kotlin/frontend
       dockerfile: Dockerfile        # production build

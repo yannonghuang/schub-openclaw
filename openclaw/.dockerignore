@@ -1,0 +1,18 @@
+# Runtime state — never bake into image
+credentials/
+logs/
+delivery-queue/
+memory/
+devices/
+identity/
+agents/*/sessions/
+update-check.json
+
+# Generated at runtime by entrypoint.sh from the template
+openclaw.json
+openclaw.json.bak*
+
+# Dev artifacts
+schub-openclaw.code-workspace
+Dockerfile
+.dockerignore
