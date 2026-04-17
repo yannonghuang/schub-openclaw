@@ -1,7 +1,7 @@
 DEV_FILES  = --env-file .env.dev  -f docker-compose.yml -f docker-compose.dev.yml
 PROD_FILES = --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml
 
-.PHONY: dev dev-d dev-build prod prod-pull build push down logs ps seed-db
+.PHONY: dev dev-d dev-build prod prod-pull build push down down-prod logs logs-prod ps ps-prod seed-db psql
 
 # ── Development ───────────────────────────────────────────────────────────────
 
@@ -28,25 +28,37 @@ prod-pull:                    ## Pull latest images then start prod stack
 build:                        ## Build all images (reads REGISTRY/TAG from .env.dev or env)
 	docker compose $(DEV_FILES) build
 
-push:                         ## Build and push all images to registry (set REGISTRY + TAG in env)
-	./scripts/build-push.sh
+push:                         ## Build and push all images to registry (reads REGISTRY/TAG from .env.dev)
+	@set -a && . ./.env.dev && set +a && PATH="/usr/local/bin:$$PATH" ./scripts/build-push.sh
 
 # ── Common ────────────────────────────────────────────────────────────────────
 
-down:                         ## Stop and remove containers (current env)
-	docker compose down
+down:                         ## Stop and remove containers (dev stack)
+	docker compose $(DEV_FILES) down
 
-logs:                         ## Tail logs (current env)
-	docker compose logs -f
+down-prod:                    ## Stop and remove containers (prod stack)
+	docker compose $(PROD_FILES) down
 
-ps:                           ## Show running services
-	docker compose ps
+logs:                         ## Tail logs (dev stack)
+	docker compose $(DEV_FILES) logs -f
+
+logs-prod:                    ## Tail logs (prod stack)
+	docker compose $(PROD_FILES) logs -f
+
+ps:                           ## Show running services (dev stack)
+	docker compose $(DEV_FILES) ps
+
+ps-prod:                      ## Show running services (prod stack)
+	docker compose $(PROD_FILES) ps
 
 seed-db:                      ## Seed the schub database (run once after first start)
-	docker compose exec auth-service python seed_db.py
-	docker compose exec auth-service python seed_materials.py
-	docker compose exec auth-service python seed_locations.py
-	docker compose exec auth-service python seed_transportations.py
+	docker compose $(DEV_FILES) exec auth-service python seed_db.py
+	docker compose $(DEV_FILES) exec auth-service python seed_materials.py
+	docker compose $(DEV_FILES) exec auth-service python seed_locations.py
+	docker compose $(DEV_FILES) exec auth-service python seed_transportations.py
+
+psql:                         ## Open a psql shell on the schub database
+	docker compose $(DEV_FILES) exec db psql -U postgres -d schub
 
 volumes-dev:                  ## Create local named volumes for dev (first-time setup)
 	docker volume create schub_db-data

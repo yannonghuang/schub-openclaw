@@ -8,6 +8,10 @@ data/*
 bom-rewrite-solve/_data/*
 
 .env
+.env.dev
+.env.prod
+certs/
+csv/
 
 # OpenClaw runtime state (auto-generated, not part of source)
 openclaw/agents/*/sessions/

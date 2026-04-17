@@ -43,7 +43,9 @@ services:
       target: dev
     volumes:
       - ./services/audit:/app
-      - ./services/auth/data:/app/data
+      - ./services/auth:/auth_service
+    environment:
+      - PYTHONPATH=/app:/auth_service
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9000", "--reload"]
 
   frontend-service:
@@ -87,6 +89,10 @@ services:
 
 volumes:
   db-data:
+    external: true
+    name: schub_db-data
   pgadmin-data:
+    external: true
+    name: schub_pgadmin-data
   frontend_node_modules:
   allocator_frontend_node_modules:
