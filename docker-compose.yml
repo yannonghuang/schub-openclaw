@@ -215,8 +215,6 @@ services:
         condition: service_completed_successfully
 
   allocator-frontend:
-    ports:
-      - "3001:3000"
     environment:
       API_BACKEND_URL: http://allocator-backend:8000
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

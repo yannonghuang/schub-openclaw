@@ -138,6 +138,13 @@ export default function NavBar() {
             </div>
 
             <a
+              href="/allocator/"
+              className="text-gray-800 hover:text-blue-600 font-medium cursor-pointer"
+            >
+              {t("nav.allocator")}
+            </a>
+
+            <a
               href="/agent-chat-ui/"
               target="_blank"
               rel="noopener noreferrer"

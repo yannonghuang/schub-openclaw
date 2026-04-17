@@ -25,6 +25,32 @@ http {
     # Set FRONTEND_URL in .env — e.g. https://192.168.1.10
     set $NEXT_PUBLIC_FRONTEND_URL "${FRONTEND_URL}";
 
+    # Internal auth subrequest — forwards session cookie to auth-service
+    location = /_auth_check {
+        internal;
+        proxy_pass              http://auth-service:4000/auth/me;
+        proxy_pass_request_body off;
+        proxy_set_header        Content-Length "";
+        proxy_set_header        Cookie $http_cookie;
+        proxy_set_header        X-Original-URI $request_uri;
+    }
+
+    # Allocator frontend — protected by session auth, served under /allocator/
+    location /allocator/ {
+        auth_request  /_auth_check;
+        error_page 401 = @allocator_login_redirect;
+
+        proxy_pass         http://allocator-frontend:3000;
+        proxy_set_header   Host $host;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade $http_upgrade;
+        proxy_set_header   Connection $connection_upgrade;
+    }
+
+    location @allocator_login_redirect {
+        return 302 /signin;
+    }
+
     # Frontend
     location / {
       set $frontend_upstream http://frontend-service:3000;

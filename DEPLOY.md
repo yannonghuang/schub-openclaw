@@ -197,8 +197,7 @@ Expose only HTTPS to LAN clients. All internal service ports remain on the Docke
 
 ```bash
 sudo ufw allow 22/tcp      # SSH
-sudo ufw allow 443/tcp     # HTTPS (main UI + API)
-sudo ufw allow 3001/tcp    # Allocator UI (optional — expose if needed)
+sudo ufw allow 443/tcp     # HTTPS (main UI + API — includes /allocator/ path)
 sudo ufw enable
 ```
 
@@ -212,7 +211,7 @@ sudo ufw enable
 |-------|---------|
 | All services healthy | `make ps` |
 | Main UI | Open `https://$SERVER_HOST` in a browser |
-| Allocator UI | Open `http://$SERVER_HOST:3001` |
+| Allocator UI | Sign in, then open `https://$SERVER_HOST/allocator/` |
 | Auth API | `curl -sk https://$SERVER_HOST/auth/health` |
 | Allocator API | `curl -sk https://$SERVER_HOST:8000/health` |
 | Agent traces | Trigger a material event in the UI; confirm trace messages appear |

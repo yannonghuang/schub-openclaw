@@ -11,6 +11,7 @@
     "settings": "Settings",
     "users": "Users",
     "transportation": "Transportation",
+    "allocator": "Allocator",
     "playground": "Playground",
     "logout": "Logout",
     "signIn": "Sign In"
