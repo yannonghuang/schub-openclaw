@@ -242,6 +242,83 @@ make dev-build      # rebuild changed images and restart
 
 ---
 
+## Database: Replicating Dev Data to Prod
+
+There are two independent databases: `schub` (auth, materials, locations, orders) and `allocator` (cases, allocation runs).
+
+### Approach A — Re-seed from scripts (first-time / clean prod)
+
+Runs the same deterministic seed scripts used in dev:
+
+```bash
+# On the VM
+make seed-db-prod
+```
+
+Then load allocator CSV data (CSVs must already be at `ALLOCATOR_CSV_PATH`):
+
+```bash
+export SERVER_HOST=192.168.x.x
+
+# Create a case
+curl -sk https://$SERVER_HOST:8000/cases \
+  -H 'Content-Type: application/json' -d '{"name":"Default"}'
+
+# Import CSV files
+curl -sk -X POST https://$SERVER_HOST:8000/cases/1/import-csv \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+### Approach B — pg_dump / restore (promote real dev data to prod)
+
+Use this when you have business data in dev (users, orders, overrides, etc.) that you want to replicate exactly.
+
+**1. Dump on dev machine:**
+
+```bash
+docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml \
+  exec db pg_dump -U postgres -d schub --no-owner --no-acl \
+  > schub_$(date +%Y%m%d).sql
+```
+
+For the allocator database:
+
+```bash
+docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml \
+  exec db pg_dump -U postgres -d allocator --no-owner --no-acl \
+  > allocator_$(date +%Y%m%d).sql
+```
+
+**2. Copy dump files to the VM:**
+
+```bash
+scp schub_$(date +%Y%m%d).sql allocator_$(date +%Y%m%d).sql user@$SERVER_HOST:~/
+```
+
+**3. Restore on the VM:**
+
+```bash
+# Stop services that hold connections (keep db running)
+docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml \
+  stop auth-service openclaw adaptor audit-service allocator-backend allocator-frontend
+
+# Restore schub
+docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml \
+  exec -T db psql -U postgres -d schub < ~/schub_YYYYMMDD.sql
+
+# Restore allocator
+docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml \
+  exec -T db psql -U postgres -d allocator < ~/allocator_YYYYMMDD.sql
+
+# Restart stopped services
+docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml \
+  up -d
+```
+
+> **Note:** `--no-owner --no-acl` keeps the dump portable across environments. The restore connects as `postgres` which owns all objects anyway.
+
+> **Warning:** Restoring overwrites all existing prod data. Take a prod dump first if there is data worth preserving.
+
 ---
 
 ## Image-Based Deployment (no source code on VM)

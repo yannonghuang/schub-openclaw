@@ -35,11 +35,11 @@ docker build --target prod -t schub-openclaw-switch-service \
   -f services/switch/Dockerfile .
 docker build --target prod -t schub-openclaw-audit-service \
   -f services/audit/Dockerfile .
-docker build --target prod -t schub-openclaw-frontend-service \
+docker build --no-cache --target prod -t schub-openclaw-frontend-service \
   -f frontend/Dockerfile ./frontend
 docker build --target prod -t schub-openclaw-mcp-server \
   -f mcp-server/dockerfile ./mcp-server
-docker build --target runner -t schub-openclaw-allocator-frontend \
+docker build --no-cache --target runner -t schub-openclaw-allocator-frontend \
   ../allocator_inno_kotlin/frontend
 
 # Compose source name → registry target name (parallel arrays, bash 3 compatible)

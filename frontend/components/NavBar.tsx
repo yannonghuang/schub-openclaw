@@ -139,6 +139,8 @@ export default function NavBar() {
 
             <a
               href="/allocator/"
+              target="_blank"
+              rel="noopener noreferrer"
               className="text-gray-800 hover:text-blue-600 font-medium cursor-pointer"
             >
               {t("nav.allocator")}

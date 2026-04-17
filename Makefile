@@ -22,6 +22,7 @@ prod:                         ## Start prod stack from pre-built images (detache
 prod-pull:                    ## Pull latest images then start prod stack
 	docker compose $(PROD_FILES) pull
 	docker compose $(PROD_FILES) up -d
+	docker compose $(PROD_FILES) restart nginx
 
 # ── Build & push ──────────────────────────────────────────────────────────────
 
@@ -56,6 +57,12 @@ seed-db:                      ## Seed the schub database (run once after first s
 	docker compose $(DEV_FILES) exec auth-service python seed_materials.py
 	docker compose $(DEV_FILES) exec auth-service python seed_locations.py
 	docker compose $(DEV_FILES) exec auth-service python seed_transportations.py
+
+seed-db-prod:                 ## Seed the schub database on prod VM (run once after first start)
+	docker compose $(PROD_FILES) exec auth-service python seed_db.py
+	docker compose $(PROD_FILES) exec auth-service python seed_materials.py
+	docker compose $(PROD_FILES) exec auth-service python seed_locations.py
+	docker compose $(PROD_FILES) exec auth-service python seed_transportations.py
 
 psql:                         ## Open a psql shell on the schub database
 	docker compose $(DEV_FILES) exec db psql -U postgres -d schub

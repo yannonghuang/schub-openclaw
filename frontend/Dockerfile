@@ -20,6 +20,7 @@ CMD ["npm", "run", "dev"]
 # === Production build stage ===
 FROM base AS builder
 WORKDIR /app
+ENV NODE_ENV=production
 COPY . .
 RUN npm ci    # Install dependencies here
 RUN npm run build
