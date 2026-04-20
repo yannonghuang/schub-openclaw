@@ -35,3 +35,6 @@ openclaw/update-check.json
 openclaw/memory/*.sqlite
 openclaw/openclaw.json.bak*
 openclaw/openclaw.json
+openclaw/tasks/runs.sqlite
+openclaw/tasks/runs.sqlite-shm
+openclaw/tasks/runs.sqlite-wal

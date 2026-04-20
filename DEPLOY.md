@@ -13,7 +13,88 @@ Two deployment modes are supported:
 
 ## Prerequisites
 
-Fresh Ubuntu 22.04+ / Debian 12+ server with internet access.
+Target host: a bare-metal or VM Linux server with internet access for pulling
+base images and (optionally) reaching Anthropic / SMTP / IMAP endpoints.
+
+### Operating system
+
+| Item | Requirement |
+|------|-------------|
+| OS family | Linux, x86_64 (64-bit) |
+| Tested distributions | Ubuntu 22.04 / 24.04 LTS, Debian 12 |
+| Also expected to work | RHEL 9, Rocky Linux 9, AlmaLinux 9 (adjust `apt` → `dnf`) |
+| Kernel | 5.15+ (required by Docker 24+) |
+| systemd | Required (supervises the Docker daemon) |
+| Locale | `en_US.UTF-8` or any UTF-8 locale (CSV imports assume UTF-8) |
+| Timezone | `UTC` recommended |
+
+macOS and Windows are supported only as **build / dev machines**, not as
+production hosts.
+
+### Hardware (single-host install)
+
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| CPU | 4 cores (x86_64) | 8 cores |
+| RAM | 8 GB | 16 GB (allocation / planning engines are memory-heavy on large cases) |
+| Disk | 50 GB SSD | 200 GB NVMe SSD (Postgres + run history + image layers grow over time) |
+| Network | 100 Mbps | 1 Gbps LAN |
+| Filesystem | `ext4` or `xfs` (avoid NFS for the Postgres volume) |
+
+### Required host tools
+
+All application runtimes (Node, JDK, Python, Postgres, Redis) run **inside
+containers** — you do NOT install them on the host. Only the following host
+tools are required:
+
+| Tool | Minimum version | Purpose | Required? |
+|------|-----------------|---------|-----------|
+| `docker` (Engine) | 24.0+ | Runs every service | yes |
+| `docker compose` (plugin) | v2.20+ | Orchestrates `docker-compose*.yml` | yes |
+| `make` | 4.0+ | Entry point for every workflow (`make dev-build`, `make prod-pull`, …) | yes |
+| `git` | 2.30+ | Clone / update source-based deploys (skip for image-based) | source-based only |
+| `curl` | any | Installer scripts, health checks | yes |
+| `openssl` | 1.1.1+ | Generate `OPENCLAW_TOKEN` and other secrets | yes |
+| `mkcert` | 1.4+ | Self-signed TLS cert for internal HTTPS (Step 2) | yes |
+| `libnss3-tools` | — | Dependency of `mkcert` on Debian/Ubuntu | yes (apt) |
+| `ufw` / `firewalld` | — | Host firewall (Step 7) | yes |
+| `bash` | 4+ | Runs `scripts/*.sh` (e.g. `smoke_test_kotlin.sh`) | yes |
+
+### Network & ports
+
+Only 22 (SSH) and 443 (HTTPS) need to be reachable from LAN clients. Every
+other service port is on the internal Docker network. If you run the optional
+private Docker registry on the VM, expose port 5000 to the build machine only.
+
+See the [Service Reference](#service-reference) table at the bottom for the
+full list of container ports and whether they are published to the host.
+
+Outbound HTTPS (443) is required to reach:
+- `ghcr.io`, `docker.io`, `registry-1.docker.io` — base images
+- `api.anthropic.com` — required for openclaw agents
+- your SMTP / IMAP provider — for HITL email relay
+
+### 系统要求（简明中文版）
+
+生产环境部署仅支持 **Linux x86_64** 主机，所有应用运行时均在容器内，无需在主机安装。
+
+**操作系统**：Ubuntu 22.04/24.04 LTS 或 Debian 12（已测试）；RHEL/Rocky/Alma 9（预期可用）。内核 5.15+，systemd，UTF-8 locale，建议 UTC 时区。
+
+**硬件（单机部署）**：
+
+| 资源 | 最低配置 | 推荐配置 |
+|------|----------|----------|
+| CPU | 4 核 | 8 核 |
+| 内存 | 8 GB | 16 GB |
+| 磁盘 | 50 GB SSD | 200 GB NVMe SSD |
+| 网络 | 100 Mbps | 1 Gbps 局域网 |
+| 文件系统 | ext4 / xfs（Postgres 卷不要用 NFS） | 同左 |
+
+**必装主机工具**：`docker` (24.0+)、`docker compose` v2 (2.20+)、`make` (4.0+)、`git`、`curl`、`openssl`、`mkcert`、`libnss3-tools`、`ufw` 或 `firewalld`、`bash`。
+
+**网络端口**：对外仅需开放 22 (SSH) 与 443 (HTTPS)；其他服务端口全部在 Docker 内部网络。私有镜像仓库（可选）端口 5000 仅对构建机开放。
+
+**出站访问**（443/tcp）：`ghcr.io`、`docker.io`、`registry-1.docker.io`（基础镜像）；`api.anthropic.com`（Agent 必需）；SMTP/IMAP 邮件服务商。
 
 ### Docker Engine + Compose v2
 
