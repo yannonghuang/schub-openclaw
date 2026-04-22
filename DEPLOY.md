@@ -69,10 +69,25 @@ private Docker registry on the VM, expose port 5000 to the build machine only.
 See the [Service Reference](#service-reference) table at the bottom for the
 full list of container ports and whether they are published to the host.
 
-Outbound HTTPS (443) is required to reach:
-- `ghcr.io`, `docker.io`, `registry-1.docker.io` — base images
-- `api.anthropic.com` — required for openclaw agents
-- your SMTP / IMAP provider — for HITL email relay
+Outbound HTTPS (443) required from the Prod VM at runtime:
+
+- **Docker Hub** — pulls `nginx`, `redis`, `pgvector/pgvector`, `dpage/pgadmin4`, and `registry:2` (base images referenced directly by compose; not in your private registry):
+  - `registry-1.docker.io` — registry API
+  - `auth.docker.io` — token exchange
+  - `production.cloudflare.docker.com` — layer blob CDN (layers aren't served from the registry host itself)
+- `api.anthropic.com` — openclaw LLM calls
+- `api.openai.com` — allocator supply-change impact assessment (see `OPENAI_API_KEY` in `.env.prod`)
+- Your SMTP host (587 or 465) and IMAP host (993) — HITL email relay
+- **Conditional**: `slack.com` / `api.telegram.org` only if `SLACK_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN` are set
+- **Conditional**: `ghcr.io`, `pkg-containers.githubusercontent.com` only if `REGISTRY=ghcr.io/yourorg/` (not needed when using the private VM registry)
+
+One-time outbound HTTPS required **before** Docker is installed (host bootstrap):
+
+- `get.docker.com`, `download.docker.com` — Docker Engine installer
+- `github.com`, `objects.githubusercontent.com` — mkcert binary download
+- `deb.debian.org`, `security.debian.org` — `apt install libnss3-tools curl make`
+
+> The Prod VM does **not** need PyPI / npmjs / Maven Central / Gradle egress — all `pip install`, `npm ci`, and `./gradlew shadowJar` steps run on the build machine, not on the VM.
 
 ### 系统要求（简明中文版）
 
@@ -94,7 +109,18 @@ Outbound HTTPS (443) is required to reach:
 
 **网络端口**：对外仅需开放 22 (SSH) 与 443 (HTTPS)；其他服务端口全部在 Docker 内部网络。私有镜像仓库（可选）端口 5000 仅对构建机开放。
 
-**出站访问**（443/tcp）：`ghcr.io`、`docker.io`、`registry-1.docker.io`（基础镜像）；`api.anthropic.com`（Agent 必需）；SMTP/IMAP 邮件服务商。
+**生产 VM 运行时出站访问**（443/tcp）：
+
+- **Docker Hub**（拉取 `nginx`、`redis`、`pgvector/pgvector`、`dpage/pgadmin4`、`registry:2` 等基础镜像，这些未进入私有镜像仓库，compose 直接引用）：`registry-1.docker.io`（API）、`auth.docker.io`（鉴权）、`production.cloudflare.docker.com`（层数据 CDN，层不是从 registry 主机直出）
+- `api.anthropic.com`（openclaw LLM 调用）
+- `api.openai.com`（allocator 供应变更影响评估，见 `.env.prod` 中 `OPENAI_API_KEY`）
+- SMTP 主机（587/465）与 IMAP 主机（993）——HITL 邮件往返
+- **条件项**：`slack.com` / `api.telegram.org` 仅当设置了 `SLACK_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN`
+- **条件项**：`ghcr.io`、`pkg-containers.githubusercontent.com` 仅当 `REGISTRY=ghcr.io/yourorg/`（使用 VM 本地私有仓库时无需）
+
+**主机引导阶段（Docker 安装前）一次性出站**：`get.docker.com`、`download.docker.com`（Docker 安装脚本）；`github.com`、`objects.githubusercontent.com`（mkcert 二进制）；`deb.debian.org`、`security.debian.org`（apt 安装 libnss3-tools / curl / make）。
+
+> 生产 VM **不需要** PyPI / npmjs / Maven Central / Gradle 出站——所有 `pip install`、`npm ci`、`./gradlew shadowJar` 都在构建机上完成。
 
 ### Docker Engine + Compose v2
 

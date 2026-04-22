@@ -216,21 +216,22 @@ exec curl -s -X POST http://auth-service:4000/send-email \
 ```
 Replace SUBJECT and BODY with the locale-appropriate values above (with MATERIALS substituted).
 
-If `_material_session_key` is present in the original task, publish a trace event then call back the material session so it can continue its workflow (spawn Planning Agent). Include the **full original event context** so the material session has everything needed to spawn planning:
+If `_material_session_key` is present in the original task, publish a trace event then **dispatch an async callback** to the material session so it can continue its workflow (spawn Planning Agent). The callback is fire-and-forget: your turn ends as soon as the curl is dispatched, and the server-side material turn runs to completion independently. Include the **full original event context** so the material session has everything needed to spawn planning:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
   -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.order.returningControl\", \"agent\": \"order\", \"level\": \"detail\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
 ```
 ```
-exec curl -s -X POST http://openclaw:18789/v1/chat/completions \
+exec sh -c 'nohup curl -s -X POST http://openclaw:18789/v1/chat/completions \
   -H "Authorization: Bearer ${OPENCLAW_TOKEN}" \
-  -H 'x-openclaw-session-key: MATERIAL_SESSION_KEY' \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"openclaw:material","messages":[{"role":"user","content":"{\"type\":\"order_complete\",\"outcome\":\"approved\",\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"supply_id\":\"SUPPLY_ID\",\"quantity_decrease_pct\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS,\"rating\":\"RATING\",\"explanation\":\"EXPLANATION\",\"case_id\":CASE_ID,\"plan_run_id\":PLAN_RUN_ID,\"contingent_plan_run_id\":CONTINGENT_PLAN_RUN_ID}"}],"stream":true}' \
-  --max-time 10 || true
+  -H "x-openclaw-session-key: MATERIAL_SESSION_KEY" \
+  -H "Content-Type: application/json" \
+  -d '"'"'{"model":"openclaw:material","messages":[{"role":"user","content":"{\"type\":\"order_complete\",\"outcome\":\"approved\",\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"supply_id\":\"SUPPLY_ID\",\"quantity_decrease_pct\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS,\"rating\":\"RATING\",\"explanation\":\"EXPLANATION\",\"case_id\":CASE_ID,\"plan_run_id\":PLAN_RUN_ID,\"contingent_plan_run_id\":CONTINGENT_PLAN_RUN_ID}"}],"stream":false}'"'"' \
+  >/tmp/order_callback_BUSINESS_ID_MESSAGE_ID.log 2>&1 </dev/null & \
+  disown; echo callback_dispatched'
 ```
-Replace all placeholders with actual values from the original task: MATERIAL_SESSION_KEY (from `_material_session_key`), BUSINESS_ID, MESSAGE_ID, SOURCE_ID, RECIPIENTS_JSON (e.g. `[1,101,103]`), MATERIALS_JSON (e.g. `["Steel Rod"]`), SUPPLY_ID, QTY_PCT, DELAY_DAYS, RATING, EXPLANATION, CASE_ID, PLAN_RUN_ID, CONTINGENT_PLAN_RUN_ID (from the persisted context file).
+Replace all placeholders with actual values from the original task: MATERIAL_SESSION_KEY (from `_material_session_key`), BUSINESS_ID, MESSAGE_ID, SOURCE_ID, RECIPIENTS_JSON (e.g. `[1,101,103]`), MATERIALS_JSON (e.g. `["Steel Rod"]`), SUPPLY_ID, QTY_PCT, DELAY_DAYS, RATING, EXPLANATION, CASE_ID, PLAN_RUN_ID, CONTINGENT_PLAN_RUN_ID (from the persisted context file). Expect the exec to print `callback_dispatched` — that is the success indicator. Do not wait for the HTTP response body; if diagnostics are needed, inspect `/tmp/order_callback_BUSINESS_ID_MESSAGE_ID.log` inside the openclaw container.
 
 ### Step 4 — Report and terminate
 

@@ -42,3 +42,4 @@ openclaw/exec-approvals.json
 openclaw/flows/registry.sqlite
 openclaw/flows/registry.sqlite-shm
 openclaw/flows/registry.sqlite-wal
+openclaw/openclaw.json.last-good
