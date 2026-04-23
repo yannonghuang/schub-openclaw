@@ -48,12 +48,13 @@ function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowAct
   // Translate a step key if it looks like an i18n key (e.g. "trace.planning.assessmentStarted").
   // Falls back to the raw string for legacy plain-text steps.
   const translateStep = (label: string, params?: Record<string, string>): string => {
-    if (label.startsWith("trace.")) {
-      const result = t(label, params ?? {});
-      // next-i18next returns the key itself when not found — show as-is rather than a raw key
-      return result !== label ? result : label;
-    }
-    return label;
+    if (!label) return label;
+    // Normalize — agents occasionally publish without the "trace." prefix.
+    const key = canonStep(label);
+    const result = t(key, params ?? {});
+    // next-i18next returns the key itself when not found — fall back to the
+    // raw (possibly non-prefixed) label rather than our synthetic key.
+    return result !== key ? result : label;
   };
 
   if (steps.length === 0 && !workflowActive) return null;
@@ -61,7 +62,8 @@ function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowAct
   const t0 = steps[0]?.ts ?? 0;
 
   return (
-    <div className={`rounded border px-3 py-2 text-xs space-y-1 ${workflowActive ? "border-blue-100 bg-blue-50 text-gray-600" : "border-gray-200 bg-gray-50 text-gray-500"}`}>
+    <div className={`flex justify-start`}>
+    <div className={`max-w-[85%] rounded-2xl rounded-bl-sm border px-3 py-2 text-xs space-y-1 ${workflowActive ? "border-blue-100 bg-blue-50/60 text-gray-600" : "border-gray-200 bg-gray-50 text-gray-500"}`}>
       <div className="flex items-center gap-2 mb-1 font-medium">
         {workflowActive ? (
           <>
@@ -111,8 +113,28 @@ function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowAct
         );
       })}
     </div>
+    </div>
   );
 }
+
+// Canonicalize a trace step to its full "trace.<agent>.<name>" form.
+// Agents (LLM-driven) sometimes drop the leading "trace." prefix when building
+// the publish curl; i18n keys and step comparisons always use the full form,
+// so normalize here to keep the contract forgiving.
+const canonStep = (s: string): string => (s?.startsWith("trace.") ? s : `trace.${s}`);
+
+// Terminal traces — session is truly idle after these, so release the input.
+// Without explicit terminal signals the input stays gated until the safety-net
+// timer (10min) fires — too long for good UX.
+const TERMINAL_STEPS = new Set<string>([
+  "trace.order.complete",
+  "trace.order.rejected",
+  "trace.planning.complete",
+  "trace.planning.rejected",
+  "trace.material.complete",
+  "trace.material.negotiationAbandoned",
+  "trace.material.baselineDrifted",
+]);
 
 function normalizeContent(raw: any, isStreaming = false): string {
   if (!raw) return "";
@@ -128,17 +150,26 @@ function normalizeContent(raw: any, isStreaming = false): string {
   return String(raw);
 }
 
+function formatTs(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 /* ------------------------------------------------------------------ */
-/* MessageTable — scrollable message list with a visible drag handle  */
+/* MessageTable — scrollable conversation with trace inlined at end    */
 /* ------------------------------------------------------------------ */
-function MessageTable({ height, onHeightChange, isLoading, messages, steps }: {
+function MessageTable({ height, onHeightChange, isLoading, messages, steps, workflowActive }: {
   height: number;
   onHeightChange: (h: number) => void;
   isLoading: boolean;
   messages: ChatMessage[];
   steps: StepEvent[];
+  workflowActive: boolean;
 }) {
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const onHandleMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -157,29 +188,48 @@ function MessageTable({ height, onHeightChange, isLoading, messages, steps }: {
     window.addEventListener("mouseup", onUp);
   };
 
+  // Auto-scroll to the bottom when new messages or trace steps arrive
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages.length, steps.length, workflowActive]);
+
   return (
-    <div className="border rounded shadow-sm bg-white flex flex-col" style={{ height }}>
-      <div className="p-2 flex-1 overflow-y-auto space-y-3 bg-gray-50" style={{ minHeight: 0 }}>
+    <div className="border border-gray-200 rounded-lg shadow-sm bg-white flex flex-col overflow-hidden" style={{ height }}>
+      <div ref={scrollRef} className="px-4 py-3 flex-1 overflow-y-auto space-y-3 bg-gradient-to-b from-gray-50 to-white" style={{ minHeight: 0 }}>
         {messages.map((m, idx) => {
           const isLastMsg = idx === messages.length - 1;
           const isStreamingThis = isLoading && isLastMsg && m.role === "assistant";
+          const isUser = m.role === "user";
           return (
-            <div key={`${m.role}-${idx}`} className="p-2 rounded border bg-white shadow-sm">
-              <div className="font-semibold capitalize mb-1 text-blue-600">
-                {`${m.role}: ${m.created_at ?? ""}`}
+            <div key={`${m.role}-${idx}`} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm shadow-sm ${
+                isUser
+                  ? "bg-blue-500 text-white rounded-br-sm"
+                  : "bg-white text-gray-800 border border-gray-200 rounded-bl-sm"
+              }`}>
+                <div className="whitespace-pre-wrap break-words leading-relaxed">
+                  {normalizeContent(m.content, isStreamingThis)}
+                </div>
+                {m.created_at && (
+                  <div className={`text-[10px] mt-1 tabular-nums ${isUser ? "text-blue-100" : "text-gray-400"}`}>
+                    {formatTs(m.created_at)}
+                  </div>
+                )}
               </div>
-              <pre className="whitespace-pre-wrap text-sm overflow-x-auto bg-gray-100 p-2 rounded">
-                {normalizeContent(m.content, isStreamingThis)}
-              </pre>
             </div>
           );
         })}
-        {isLoading && steps.length === 0 && <Tool_Spinner />}
+        {(steps.length > 0 || workflowActive) && (
+          <StepsTrace steps={steps} workflowActive={workflowActive} />
+        )}
+        {isLoading && steps.length === 0 && !workflowActive && <Tool_Spinner />}
       </div>
       {/* Visible drag handle */}
       <div
         onMouseDown={onHandleMouseDown}
-        className="flex-shrink-0 h-2 bg-gray-200 hover:bg-blue-300 active:bg-blue-400 cursor-ns-resize transition-colors flex items-center justify-center"
+        className="flex-shrink-0 h-2 bg-gray-100 hover:bg-blue-200 active:bg-blue-300 cursor-ns-resize transition-colors flex items-center justify-center border-t border-gray-200"
         title="Drag to resize"
       >
         <div className="w-8 h-0.5 bg-gray-400 rounded-full" />
@@ -217,6 +267,26 @@ export default function Agent({
   const [workflowActive, setWorkflowActive] = useState(false);
   const workflowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  /* ------------------------------------------------------------------ */
+  /* Material-agent negotiation state (CLI-like chat handoff)           */
+  /* ------------------------------------------------------------------ */
+  type ActiveNegotiation = {
+    caseId: number;
+    sessionKey: string;
+    round: number;
+    supplyId: string;
+    rating: string;
+    explanation: string;
+    currentDelay: number;
+    currentQtyPct: number;
+    contingentPlanRunId: number;
+    baselinePlanRunId?: number;
+    impactedDemandCount: number;
+  };
+  const [activeNegotiation, setActiveNegotiation] = useState<ActiveNegotiation | null>(null);
+  const activeNegotiationRef = useRef<ActiveNegotiation | null>(null);
+  activeNegotiationRef.current = activeNegotiation;
   // Auto-open timeline for reopened threads (no initialMessage = history view)
   const [showTimeline, setShowTimeline] = useState(!initialMessage?.trim());
   const [msgHeight, setMsgHeight] = useState(300);
@@ -241,7 +311,76 @@ export default function Agent({
       ]);
       setWorkflowActive(true);
       if (workflowTimerRef.current) clearTimeout(workflowTimerRef.current);
-      workflowTimerRef.current = setTimeout(() => setWorkflowActive(false), 30_000);
+      // Safety-net timeout only — real release comes from a terminal trace or
+      // sendMessage. Must exceed the longest legitimate inter-trace pause
+      // (async-job polling, counter-callback, planner negotiation latency).
+      workflowTimerRef.current = setTimeout(() => setWorkflowActive(false), 600_000);
+
+      // Material-agent negotiation: render a CLI-style card + enable slash
+      // commands in the chat input.
+      const v = event.value as unknown as Record<string, unknown>;
+      const step = canonStep(event.value.step);
+      if (step === "trace.material.negotiationWaiting") {
+        const neg: ActiveNegotiation = {
+          caseId: Number(v.caseId),
+          sessionKey: String(v.sessionKey),
+          round: Number(v.round),
+          supplyId: String(v.supplyId),
+          rating: String(v.rating),
+          explanation: String(v.explanation ?? ""),
+          currentDelay: Number(v.currentDelay),
+          currentQtyPct: Number(v.currentQtyPct),
+          contingentPlanRunId: Number(v.contingentPlanRunId),
+          baselinePlanRunId: v.baselinePlanRunId != null ? Number(v.baselinePlanRunId) : undefined,
+          impactedDemandCount: Number(v.impactedDemandCount ?? 0),
+        };
+        setActiveNegotiation(neg);
+        const isZh = locale === "zh" || locale?.startsWith("zh");
+        const plural = (n: number, en: string) => (n === 1 ? en : `${en}s`);
+        const paramsEn =
+          neg.currentDelay > 0 && neg.currentQtyPct > 0
+            ? `delaying by ${neg.currentDelay} ${plural(neg.currentDelay, "day")} and cutting ${neg.currentQtyPct}%`
+            : neg.currentDelay > 0
+              ? `delaying by ${neg.currentDelay} ${plural(neg.currentDelay, "day")}`
+              : `cutting ${neg.currentQtyPct}%`;
+        const paramsZh =
+          neg.currentDelay > 0 && neg.currentQtyPct > 0
+            ? `延迟 ${neg.currentDelay} 天、削减 ${neg.currentQtyPct}%`
+            : neg.currentDelay > 0
+              ? `延迟 ${neg.currentDelay} 天`
+              : `削减 ${neg.currentQtyPct}%`;
+        const severityEn = neg.rating === "HIGH" ? "would seriously disrupt" : "would affect";
+        const askEn = neg.rating === "HIGH" ? "Can we soften this?" : "Any chance you can scale it back?";
+        const askZh = neg.rating === "HIGH" ? "能不能再缓一缓？" : "能不能稍微收一点？";
+        const roundEn = neg.round > 1 ? `round ${neg.round}` : "first look";
+        const roundZh = neg.round > 1 ? `第 ${neg.round} 轮` : "首轮评估";
+        const content = isZh
+          ? `这次调整将影响供应 ${neg.supplyId} 上的 ${neg.impactedDemandCount} 条需求 — ${paramsZh}。\n` +
+            (neg.explanation ? `\n“${neg.explanation}”\n` : "") +
+            `\n${askZh}\n回复示例：同意 / 试试 2 天 5% / 算了。\n也可用指令：/accept · /counter delay=<d> qty=<p> · /abandon\n（${roundZh}，评级 ${neg.rating}）`
+          : `This change ${severityEn} ${neg.impactedDemandCount} demand ${plural(neg.impactedDemandCount, "line")} on supply ${neg.supplyId} — ${paramsEn}.\n` +
+            (neg.explanation ? `\n“${neg.explanation}”\n` : "") +
+            `\n${askEn}\nTry: "accept" / "try 3 days and 10%" / "drop it".\nOr use: /accept · /counter delay=<d> qty=<p> · /abandon\n(${roundEn}, rating ${neg.rating})`;
+        addMessage({
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content,
+          created_at: new Date().toISOString(),
+        });
+      } else if (
+        step === "trace.material.negotiationAccepted" ||
+        step === "trace.material.negotiationAbandoned" ||
+        step === "trace.material.negotiationExhausted" ||
+        step === "trace.material.negotiationLateReplyIgnored" ||
+        step === "trace.material.baselineDrifted"
+      ) {
+        setActiveNegotiation(null);
+      }
+
+      if (TERMINAL_STEPS.has(step)) {
+        if (workflowTimerRef.current) clearTimeout(workflowTimerRef.current);
+        setWorkflowActive(false);
+      }
     },
     // onToolCallEnd — async job complete: resume OpenClaw via /agui/chat
     async (event: ToolCallEndEvent) => {
@@ -470,13 +609,109 @@ export default function Agent({
     setSuggestionIndex(-1);
   }, []);
 
+  /* ------------------------------------------------------------------ */
+  /* Negotiation dispatcher                                              */
+  /* While a negotiation is active, every chat input is routed to the   */
+  /* material session's /negotiation-reply endpoint. Slash commands     */
+  /* (/accept, /counter delay=N qty=P, /abandon) are a deterministic    */
+  /* fast-path that skips the LLM classification round-trip; anything   */
+  /* else is forwarded as natural language for the agent to classify.   */
+  /* Returns true if the input was handled as a negotiation reply.      */
+  /* ------------------------------------------------------------------ */
+  const tryNegotiationCommand = useCallback(async (raw: string): Promise<boolean> => {
+    const neg = activeNegotiationRef.current;
+    if (!neg) return false;
+    const text = raw.trim();
+    if (!text) return false;
+
+    let action: "accept" | "abandon" | "counter" | "nl" = "nl";
+    let delayDays: number | undefined;
+    let qtyPct: number | undefined;
+
+    if (/^\/accept\b/i.test(text)) {
+      action = "accept";
+    } else if (/^\/abandon\b/i.test(text)) {
+      action = "abandon";
+    } else if (/^\/counter\b/i.test(text)) {
+      const dm = text.match(/\bdelay\s*=\s*(-?\d+(?:\.\d+)?)/i);
+      const qm = text.match(/\bqty\s*=\s*(-?\d+(?:\.\d+)?)/i);
+      if (dm && qm) {
+        action = "counter";
+        delayDays = Number(dm[1]);
+        qtyPct = Number(qm[1]);
+      }
+      // If a /counter command is missing params, fall through to NL so the
+      // agent can ask back — instead of short-circuiting with a canned error.
+    }
+
+    // Echo the user's message into the chat stream
+    addMessage({
+      id: crypto.randomUUID(),
+      role: "user",
+      content: text,
+      created_at: new Date().toISOString(),
+    });
+
+    try {
+      const res = await fetch("/api/allocator/negotiation-reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          caseId: neg.caseId,
+          sessionKey: neg.sessionKey,
+          action,
+          round: neg.round,
+          delayDays,
+          qtyPct,
+          text: action === "nl" ? text : undefined,
+          baselinePlanRunId: neg.baselinePlanRunId,
+          contingentPlanRunId: neg.contingentPlanRunId,
+          supplyId: neg.supplyId,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        addMessage({
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: `negotiation reply failed (${res.status}): ${body}`,
+          created_at: new Date().toISOString(),
+        });
+        return true;
+      }
+    } catch (err) {
+      addMessage({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: `negotiation reply error: ${String(err)}`,
+        created_at: new Date().toISOString(),
+      });
+      return true;
+    }
+
+    // Clear the active negotiation — the agent will emit a new
+    // negotiationWaiting trace if it re-rates to MEDIUM/HIGH, or
+    // negotiationAmbiguous + a fresh waiting prompt if classification failed.
+    setActiveNegotiation(null);
+    return true;
+  }, [addMessage]);
+
   const sendMessage = async () => {
-    if (!userInput.trim() || !resolvedThreadId || isLoading) return;
+    if (!userInput.trim() || !resolvedThreadId) return;
+    const isNegotiation = activeNegotiationRef.current !== null;
+    // Block preemptive sends to the main agent while a workflow is running
+    // but no negotiation card is open — otherwise a stray user message (e.g.
+    // typing the reply before the waiting-prompt has arrived) routes to the
+    // wrong session and loops the state machine.
+    if ((isLoading || workflowActive) && !isNegotiation) return;
     const text = userInput;
     setUserInput("");
     setTraceSteps([]);
     setWorkflowActive(false);
     if (workflowTimerRef.current) clearTimeout(workflowTimerRef.current);
+
+    if (await tryNegotiationCommand(text)) return;
+
     await submit(text);
   };
 
@@ -499,9 +734,14 @@ export default function Agent({
     <div className="p-4 space-y-4">
       <h2 className="text-lg font-semibold">{t("run.title")}</h2>
 
-      <MessageTable height={msgHeight} onHeightChange={setMsgHeight} isLoading={isLoading} messages={allMessages} steps={traceSteps.length > 0 ? traceSteps : steps} />
-
-      <StepsTrace steps={traceSteps.length > 0 ? traceSteps : steps} workflowActive={workflowActive || isLoading} />
+      <MessageTable
+        height={msgHeight}
+        onHeightChange={setMsgHeight}
+        isLoading={isLoading}
+        messages={allMessages}
+        steps={traceSteps.length > 0 ? traceSteps : steps}
+        workflowActive={workflowActive || isLoading}
+      />
 
       {!workflowActive && !isLoading && resolvedThreadId && (
         <div className="mt-1">
@@ -545,15 +785,31 @@ export default function Agent({
             </ul>
           );
         })()}
+        {activeNegotiation && (
+          <div className="mb-1.5 flex items-center gap-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+            <span>
+              negotiating · round {activeNegotiation.round} · {activeNegotiation.rating}
+            </span>
+            <span className="text-amber-600">—</span>
+            <span className="text-amber-700">reply in plain English, or /accept · /counter · /abandon</span>
+          </div>
+        )}
         <div className="flex gap-2">
           <input
             ref={inputRef}
-            disabled={isLoading}
+            disabled={(isLoading || workflowActive) && !activeNegotiation}
             autoComplete="off"
-            className="flex-1 border rounded px-2 py-1"
+            className="flex-1 border border-gray-300 rounded-full px-4 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 disabled:bg-gray-50 disabled:text-gray-400"
             value={userInput}
             onChange={handleInputChange}
-            placeholder={t("run.typeMessage")}
+            placeholder={
+              activeNegotiation
+                ? "accept, try 3 days and 10%, drop it…"
+                : (isLoading || workflowActive)
+                  ? t("run.workflowRunning")
+                  : t("run.typeMessage")
+            }
             onKeyDown={(e) => {
               if (showSuggestions && suggestions.length > 0) {
                 if (e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); setSuggestionIndex(i => Math.min(i + 1, suggestions.length - 1)); return; }
@@ -565,8 +821,8 @@ export default function Agent({
             }}
           />
           <button
-            disabled={isLoading}
-            className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 disabled:opacity-50"
+            disabled={isLoading || !userInput.trim()}
+            className="bg-blue-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-sm hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             onClick={sendMessage}
           >
             {t("buttons.send", { ns: "common" })}

@@ -210,6 +210,8 @@ services:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/allocator
       CSV_ROOT_PATH: /data/csv
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENCLAW_URL: http://openclaw:18789
+      OPENCLAW_TOKEN: ${OPENCLAW_TOKEN}
     depends_on:
       db-init-allocator:
         condition: service_completed_successfully

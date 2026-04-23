@@ -253,6 +253,7 @@ Return this exact JSON as your final response (replacing placeholders with actua
 - **Email language**: Use the `LOCALE` value retrieved in Step 0. Write all email subjects and bodies in that language: `zh` → Chinese, `en` (or absent/error) → English. Apply to every email: approval request, rejection notification, approval notification.
 - Always include `business_id` in all tool calls.
 - Invoke `order_engine` at most once.
+- **Do NOT call `material_engine`** or any `/material-impact` endpoint. The material agent owns contingent-plan creation; re-running it here would produce duplicate contingent rows and corrupt the negotiation chain. The rating you receive from `order_engine` is already based on the baseline + params the material agent set.
 - Do not poll for job results — wait for the engine callback to resume this session.
 - Do not spawn any downstream agents (Planning, etc.) — that is the caller's responsibility.
 - Do not include raw JSON unless it is part of a tool call.

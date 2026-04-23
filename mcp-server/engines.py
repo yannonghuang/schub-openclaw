@@ -454,6 +454,10 @@ async def material_engine(payload: Dict[str, Any]):
     supply_id = data.get("supply_id", "")
     delivery_delay_days = int(data.get("delivery_delay_days", 0))
     quantity_decrease_pct = float(data.get("quantity_decrease_pct", 0.0))
+    # Optional negotiation-chain fields. When supplied, the allocator dedups on
+    # (caseId, supply_id, delay, qty, baseline, round) and marks the parent as superseded.
+    negotiation_round = data.get("negotiation_round")
+    parent_plan_run_id = data.get("parent_plan_run_id")
 
     allocator_url = os.environ.get("ALLOCATOR_BACKEND_URL", "http://allocator-backend:8000")
 
@@ -462,14 +466,19 @@ async def material_engine(payload: Dict[str, Any]):
     if supply_id:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
+                submit_body: Dict[str, Any] = {
+                    "supplyId": supply_id,
+                    "deliveryDelayDays": delivery_delay_days,
+                    "quantityDecreasePct": quantity_decrease_pct,
+                }
+                if negotiation_round is not None:
+                    submit_body["negotiationRound"] = int(negotiation_round)
+                if parent_plan_run_id is not None:
+                    submit_body["parentPlanRunId"] = int(parent_plan_run_id)
                 # 1. Submit
                 submit_resp = await client.post(
                     f"{allocator_url}/material-impact",
-                    json={
-                        "supplyId": supply_id,
-                        "deliveryDelayDays": delivery_delay_days,
-                        "quantityDecreasePct": quantity_decrease_pct,
-                    },
+                    json=submit_body,
                 )
                 if submit_resp.status_code != 202:
                     material_impact = {
