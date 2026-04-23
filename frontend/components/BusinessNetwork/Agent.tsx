@@ -350,17 +350,17 @@ export default function Agent({
               ? `延迟 ${neg.currentDelay} 天`
               : `削减 ${neg.currentQtyPct}%`;
         const severityEn = neg.rating === "HIGH" ? "would seriously disrupt" : "would affect";
-        const askEn = neg.rating === "HIGH" ? "Can we soften this?" : "Any chance you can scale it back?";
-        const askZh = neg.rating === "HIGH" ? "能不能再缓一缓？" : "能不能稍微收一点？";
+        const askEn = "Propose a new delay / qty, keep the current state, or abandon.";
+        const askZh = "请提议新的 delay / qty、保持原样，或选择放弃。";
         const roundEn = neg.round > 1 ? `round ${neg.round}` : "first look";
         const roundZh = neg.round > 1 ? `第 ${neg.round} 轮` : "首轮评估";
         const content = isZh
           ? `这次调整将影响供应 ${neg.supplyId} 上的 ${neg.impactedDemandCount} 条需求 — ${paramsZh}。\n` +
             (neg.explanation ? `\n“${neg.explanation}”\n` : "") +
-            `\n${askZh}\n回复示例：同意 / 试试 2 天 5% / 算了。\n也可用指令：/accept · /counter delay=<d> qty=<p> · /abandon\n（${roundZh}，评级 ${neg.rating}）`
+            `\n${askZh}\n回复示例：试试 2 天 5% / 就这样 / 算了。\n也可用指令：/counter delay=<d> qty=<p> · /keep · /abandon\n（${roundZh}，评级 ${neg.rating}）`
           : `This change ${severityEn} ${neg.impactedDemandCount} demand ${plural(neg.impactedDemandCount, "line")} on supply ${neg.supplyId} — ${paramsEn}.\n` +
             (neg.explanation ? `\n“${neg.explanation}”\n` : "") +
-            `\n${askEn}\nTry: "accept" / "try 3 days and 10%" / "drop it".\nOr use: /accept · /counter delay=<d> qty=<p> · /abandon\n(${roundEn}, rating ${neg.rating})`;
+            `\n${askEn}\nTry: "try 3 days and 10%" / "keep as-is" / "drop it".\nOr use: /counter delay=<d> qty=<p> · /keep · /abandon\n(${roundEn}, rating ${neg.rating})`;
         addMessage({
           id: crypto.randomUUID(),
           role: "assistant",
@@ -368,7 +368,7 @@ export default function Agent({
           created_at: new Date().toISOString(),
         });
       } else if (
-        step === "trace.material.negotiationAccepted" ||
+        step === "trace.material.negotiationKept" ||
         step === "trace.material.negotiationAbandoned" ||
         step === "trace.material.negotiationExhausted" ||
         step === "trace.material.negotiationLateReplyIgnored" ||
@@ -613,9 +613,10 @@ export default function Agent({
   /* Negotiation dispatcher                                              */
   /* While a negotiation is active, every chat input is routed to the   */
   /* material session's /negotiation-reply endpoint. Slash commands     */
-  /* (/accept, /counter delay=N qty=P, /abandon) are a deterministic    */
+  /* (/keep, /counter delay=N qty=P, /abandon) are a deterministic      */
   /* fast-path that skips the LLM classification round-trip; anything   */
   /* else is forwarded as natural language for the agent to classify.   */
+  /* /accept is kept as a legacy alias for /keep.                        */
   /* Returns true if the input was handled as a negotiation reply.      */
   /* ------------------------------------------------------------------ */
   const tryNegotiationCommand = useCallback(async (raw: string): Promise<boolean> => {
@@ -624,12 +625,12 @@ export default function Agent({
     const text = raw.trim();
     if (!text) return false;
 
-    let action: "accept" | "abandon" | "counter" | "nl" = "nl";
+    let action: "keep" | "abandon" | "counter" | "nl" = "nl";
     let delayDays: number | undefined;
     let qtyPct: number | undefined;
 
-    if (/^\/accept\b/i.test(text)) {
-      action = "accept";
+    if (/^\/(keep|accept)\b/i.test(text)) {
+      action = "keep";
     } else if (/^\/abandon\b/i.test(text)) {
       action = "abandon";
     } else if (/^\/counter\b/i.test(text)) {
@@ -792,7 +793,7 @@ export default function Agent({
               negotiating · round {activeNegotiation.round} · {activeNegotiation.rating}
             </span>
             <span className="text-amber-600">—</span>
-            <span className="text-amber-700">reply in plain English, or /accept · /counter · /abandon</span>
+            <span className="text-amber-700">reply in plain English, or /counter · /keep · /abandon</span>
           </div>
         )}
         <div className="flex gap-2">

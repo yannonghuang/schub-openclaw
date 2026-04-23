@@ -209,7 +209,9 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/allocator
       CSV_ROOT_PATH: /data/csv
+      LLM_PROVIDER: ${LLM_PROVIDER:-openclaw}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENCLAW_URL: http://openclaw:18789
       OPENCLAW_TOKEN: ${OPENCLAW_TOKEN}
     depends_on:
@@ -219,7 +221,6 @@ services:
   allocator-frontend:
     environment:
       API_BACKEND_URL: http://allocator-backend:8000
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     depends_on:
       - allocator-backend
 

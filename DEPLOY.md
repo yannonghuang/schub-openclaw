@@ -75,8 +75,8 @@ Outbound HTTPS (443) required from the Prod VM at runtime:
   - `registry-1.docker.io` — registry API
   - `auth.docker.io` — token exchange
   - `production.cloudflare.docker.com` — layer blob CDN (layers aren't served from the registry host itself)
-- `api.anthropic.com` — openclaw LLM calls
-- `api.openai.com` — allocator supply-change impact assessment (see `OPENAI_API_KEY` in `.env.prod`)
+- `api.anthropic.com` — always, for openclaw gateway LLM calls. Under the default `LLM_PROVIDER=openclaw`, allocator impact-assessment + planning-copilot traffic piggybacks on the same egress (allocator → openclaw gateway in-network, gateway → Anthropic). Only when `LLM_PROVIDER=anthropic` does the allocator call `api.anthropic.com` directly.
+- `api.openai.com` — **conditional**: only when `LLM_PROVIDER=openai`, for allocator impact-assessment + planning-copilot.
 - Your SMTP host (587 or 465) and IMAP host (993) — HITL email relay
 - **Conditional**: `slack.com` / `api.telegram.org` only if `SLACK_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN` are set
 - **Conditional**: `ghcr.io`, `pkg-containers.githubusercontent.com` only if `REGISTRY=ghcr.io/yourorg/` (not needed when using the private VM registry)
@@ -112,8 +112,8 @@ One-time outbound HTTPS required **before** Docker is installed (host bootstrap)
 **生产 VM 运行时出站访问**（443/tcp）：
 
 - **Docker Hub**（拉取 `nginx`、`redis`、`pgvector/pgvector`、`dpage/pgadmin4`、`registry:2` 等基础镜像，这些未进入私有镜像仓库，compose 直接引用）：`registry-1.docker.io`（API）、`auth.docker.io`（鉴权）、`production.cloudflare.docker.com`（层数据 CDN，层不是从 registry 主机直出）
-- `api.anthropic.com`（openclaw LLM 调用）
-- `api.openai.com`（allocator 供应变更影响评估，见 `.env.prod` 中 `OPENAI_API_KEY`）
+- `api.anthropic.com`：始终需要——openclaw 网关的 LLM 出站。默认 `LLM_PROVIDER=openclaw` 时，allocator 的影响评估与规划副驾驶经内部网关 `http://openclaw:18789` 间接复用这条通道（allocator → openclaw → Anthropic）；仅当 `LLM_PROVIDER=anthropic` 时，allocator 才会直接调用 `api.anthropic.com`。
+- `api.openai.com`：**条件项**——仅当 `LLM_PROVIDER=openai` 时，allocator 的影响评估与规划副驾驶才会调用此地址。
 - SMTP 主机（587/465）与 IMAP 主机（993）——HITL 邮件往返
 - **条件项**：`slack.com` / `api.telegram.org` 仅当设置了 `SLACK_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN`
 - **条件项**：`ghcr.io`、`pkg-containers.githubusercontent.com` 仅当 `REGISTRY=ghcr.io/yourorg/`（使用 VM 本地私有仓库时无需）
@@ -235,7 +235,9 @@ nano .env.dev
 |----------|-------------|
 | `FRONTEND_URL` | Full URL of the server, e.g. `https://192.168.x.x` |
 | `OPENCLAW_TOKEN` | Generate with `openssl rand -hex 24` |
-| `ANTHROPIC_API_KEY` | Your Anthropic API key |
+| `ANTHROPIC_API_KEY` | Anthropic credential for OpenClaw. Accepts a real API key (`sk-ant-api03-*`) or a Claude Pro OAuth token (`sk-ant-oat01-*`). Also used by the allocator when `LLM_PROVIDER=anthropic`, but in that mode only a real API key works. |
+| `LLM_PROVIDER` | Allocator LLM provider: `openclaw` (default — routes through the gateway; works with OAuth tokens), `anthropic` (direct `api.anthropic.com`, requires a real API key), or `openai` (direct `api.openai.com`). |
+| `OPENAI_API_KEY` | Optional — only required when `LLM_PROVIDER=openai` |
 | `SMTP_HOST/PORT/USER/PASS/FROM` | Outbound email (order/planning approval emails) |
 | `IMAP_HOST/PORT/USER/PASS` | Inbound email (HITL reply polling) |
 | `POSTGRES_PASSWORD` | DB password — can leave as `postgres` on an isolated LAN |
@@ -337,6 +339,33 @@ sudo ufw enable
 | Tail logs | `make logs` | `make logs-prod` |
 | Show running services | `make ps` | `make ps-prod` |
 | Open psql shell | `make psql` | `docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml exec db psql -U postgres -d schub` |
+
+---
+
+## Switching the Allocator LLM Provider
+
+The allocator-backend image has all three provider paths compiled in (`openclaw`, `anthropic`, `openai`). Switching is an env flip + container restart — **no rebuild**.
+
+| Mode | When to use | Requires |
+|------|-------------|----------|
+| `openclaw` (default) | Stay inside the stack; reuse whatever OpenClaw is configured for. Works with a Claude Pro OAuth token (`sk-ant-oat01-*`). | `OPENCLAW_TOKEN` (already set for the gateway) |
+| `anthropic` | Call `api.anthropic.com` directly — bypass the gateway. | A real Anthropic API key (`sk-ant-api03-*`) in `ANTHROPIC_API_KEY`. OAuth tokens do **not** work here. Prod VM must have egress to `api.anthropic.com`. |
+| `openai` | Call `api.openai.com` directly. | `OPENAI_API_KEY` in `.env.prod`. Prod VM must have egress to `api.openai.com`. |
+
+**To switch (on the VM):**
+
+```bash
+# Edit .env.prod — set or change:
+#   LLM_PROVIDER=openai         # or anthropic, or openclaw
+#   OPENAI_API_KEY=sk-...       # only if switching to openai
+#   ANTHROPIC_API_KEY=sk-...    # real API key if switching to anthropic; any value works for openclaw mode
+
+docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml up -d allocator-backend
+```
+
+**To revert to the default:** remove (or comment out) the `LLM_PROVIDER=` line in `.env.prod` and restart `allocator-backend`. Compose's `${LLM_PROVIDER:-openclaw}` default takes over.
+
+> OpenClaw's own LLM calls always go through `ANTHROPIC_API_KEY` regardless of this setting. `LLM_PROVIDER` only affects the allocator's impact-assessment + planning-copilot calls.
 
 ---
 
@@ -499,7 +528,11 @@ REGISTRY=192.168.x.x:5000/           # same registry used when building
 TAG=latest
 ALLOCATOR_CSV_PATH=/opt/allocator-csv
 OPENCLAW_TOKEN=<generate with openssl rand -hex 24>
-ANTHROPIC_API_KEY=<your key>
+ANTHROPIC_API_KEY=<your key — sk-ant-api03-* or sk-ant-oat01-*>
+LLM_PROVIDER=openclaw                # default — allocator goes through openclaw gateway (OAuth token OK)
+                                     #   set to "anthropic" to call api.anthropic.com directly (requires a real sk-ant-api03-* key)
+                                     #   set to "openai" to call api.openai.com directly (requires OPENAI_API_KEY)
+# OPENAI_API_KEY=<your key>          # only required when LLM_PROVIDER=openai
 # ... SMTP, IMAP, POSTGRES_PASSWORD, etc.
 ```
 

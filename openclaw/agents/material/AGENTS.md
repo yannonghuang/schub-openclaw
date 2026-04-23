@@ -12,7 +12,7 @@ You are the Material Agent. Parse the incoming event, run material analysis, del
 **Case B — Fresh Material event**: new event with `"type":"Material"` and no order-completion markers.
 → Run Step 0 (both parts), then continue with **Phase 1**.
 
-**Case C — Negotiation reply** (session paused after Step 1.6's `negotiationWaiting`): JSON with `"type":"negotiation_reply"` + `action` ∈ {`accept`,`abandon`,`counter`} + (for counter) `delay_days`/`qty_pct`; OR free-form text EN/ZH (`accept`/`ok`/`好的`, `try 3 days and 10%`/`那就试试 2 天 5%`, `drop it`/`算了`, etc.).
+**Case C — Negotiation reply** (session paused after Step 1.6's `negotiationWaiting`): JSON with `"type":"negotiation_reply"` + `action` ∈ {`keep`,`abandon`,`counter`} + (for counter) `delay_days`/`qty_pct`; OR free-form text EN/ZH (`keep as-is`/`就这样`/`保持原样` → keep, `try 3 days and 10%`/`那就试试 2 天 5%` → counter, `drop it`/`算了` → abandon, etc.). UI slash: `/keep` (primary) or `/accept` (legacy alias) → keep action.
 → Run Step 0a only. Recover `case_id`, `plan_run_id`, `contingent_plan_run_id`, `supply_id`, current `delivery_delay_days`/`quantity_decrease_pct`, round `N` from session history. Jump to **Step 1.7**.
 
 **Case D — Negotiation recompute** (self-callback from Step 1.7 counter): JSON with `"type":"negotiation_recompute"` + `round`.
@@ -66,7 +66,7 @@ If unavailable: report and stop. Response's `material_impact` contains `caseId`,
 
 ### Negotiation posture — advisory, not a gate
 
-Steps 1.5–1.7 surface impact; they never block. `accept` succeeds regardless of rating (order agent's email HITL is the real checkpoint). `counter` is accepted as-is. Only `abandon` halts. Round exhaustion auto-proceeds to Step 2. Tone: "here are the tradeoffs".
+Steps 1.5–1.7 surface impact; they never block. `keep` succeeds regardless of rating (order agent's email HITL is the real checkpoint). `counter` is honored as-is. Only `abandon` halts. Round exhaustion auto-proceeds to Step 2. Tone: "here are the tradeoffs".
 
 ### Step 1.5 — Rating check
 
@@ -101,7 +101,7 @@ End turn with: `Awaiting planner negotiation (round N). Rating=RATING.` Do NOT s
 
 1. If content parses as JSON with `"type":"negotiation_reply"`, read fields directly.
 2. Otherwise free-form NL (EN or ZH):
-   - **accept**: `accept`/`ok`/`go ahead`/`proceed`/`yes`/`sounds good`/`好的`/`同意`/`就这样`/`可以`.
+   - **keep** (user wants to proceed with the current supply state as-is, no further negotiation — triggered by `/keep` or legacy `/accept` slash, or free-form phrases): `keep`/`keep as-is`/`as-is`/`accept`/`ok`/`go ahead`/`proceed`/`yes`/`sounds good`/`好的`/`同意`/`就这样`/`保持原样`/`原样`/`可以`.
    - **abandon**: `abandon`/`cancel`/`stop`/`drop it`/`never mind`/`算了`/`取消`/`不要了`.
    - **counter**: extract `delay_days` (int; `day(s)`/`天`) and `qty_pct` (%; `%`/`percent`/`pct`/`pp`/`个点`). If only one is given, keep the current value for the other.
    - **ambiguous**: anything unclear, contradictory, or off-topic.
@@ -119,7 +119,7 @@ exec test -f /tmp/mat_neg_{session_uuid}_round_N_processed && echo DUPLICATE
 If `DUPLICATE`: output `{"outcome":"duplicate_negotiation_reply"}` and stop.
 
 Branch on `action`:
-- **accept** — `exec touch /tmp/mat_neg_{session_uuid}_round_N_processed`. Publish `trace.material.negotiationAccepted` (major, +round); continue to **Step 2** with the latest `contingent_plan_run_id`.
+- **keep** — `exec touch /tmp/mat_neg_{session_uuid}_round_N_processed`. Publish `trace.material.negotiationKept` (major, +round); continue to **Step 2** with the latest `contingent_plan_run_id`.
 - **abandon** — `exec touch /tmp/mat_neg_{session_uuid}_round_N_processed`. Publish `trace.material.negotiationAbandoned` (major, +round); run **Step 4**; stop. Do NOT mutate PlanRuns — latest contingent keeps `supersededByPlanRunId=NULL` so a planner can still promote it manually.
 - **counter** with new `delay_days`/`qty_pct` — **two-turn split** (this turn runs `material_engine`; a self-callback resumes Case D → Step 1.5/1.6 in a fresh turn; avoids compound API timeout):
   1. Call `material_engine` with new params + `negotiation_round:N` + `parent_plan_run_id:<current contingent_plan_run_id>`. Receive new `contingentPlanRunId`, `impactedDemandCount`, `material_impact`.
