@@ -66,12 +66,12 @@ services:
       - NODE_ENV=production
 
 volumes:
+  # Stable named volumes; compose auto-creates if missing instead of failing
+  # (e.g. after `docker volume rm` to reset pgadmin / postgres state).
+  # Existing volumes with these names are still adopted by name.
   db-data:
-    external: true
     name: schub_db-data
   pgadmin-data:
-    external: true
     name: schub_pgadmin-data
   openclaw-workspace:
-    external: true
     name: schub_openclaw-workspace

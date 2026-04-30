@@ -90,11 +90,14 @@ services:
     command: npm run dev
 
 volumes:
+  # Stable named volumes auto-created by compose on first `up`. Removing
+  # `external: true` makes compose create-if-missing instead of failing
+  # when the volume doesn't exist (e.g. after `docker volume rm` to reset
+  # the pgadmin password). Existing volumes with these names are still
+  # adopted by name — no data loss for users who already had them.
   db-data:
-    external: true
     name: schub_db-data
   pgadmin-data:
-    external: true
     name: schub_pgadmin-data
   frontend_node_modules:
   allocator_frontend_node_modules:

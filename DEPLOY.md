@@ -6,7 +6,7 @@ Two deployment modes are supported:
 
 | Mode | When to use | Source code on VM? | Command |
 |------|-------------|-------------------|---------|
-| **Source-based** (Steps 1–8 below) | Dev / first-time setup | Yes — build runs on the VM | `make dev-build` |
+| **Source-based** (Steps 1–6 below) | Dev / first-time setup | Yes — build runs on the VM | `make dev-build` |
 | **Image-based** (see [Image-Based Deployment](#image-based-deployment-no-source-code-on-vm)) | Production / repeatable deploys | No — pull pre-built images | `make prod-pull` |
 
 ---
@@ -244,25 +244,17 @@ nano .env.dev
 
 ---
 
-## Step 4 — Create Docker Volumes
-
-```bash
-make volumes-dev
-```
-
-This creates `schub_db-data` and `schub_pgadmin-data` as **external named volumes**.
-
-> **Why external volumes?** Plain (non-external) volumes are auto-named by Compose and will be silently deleted by `docker compose down -v`. External volumes are never deleted by Compose — you must remove them explicitly. Always use external volumes for databases.
-
----
-
-## Step 5 — Build and Start
+## Step 4 — Build and Start
 
 ```bash
 make dev-build       # build all images from source and start in foreground
 # or
 make dev-d           # start without rebuilding (detached)
 ```
+
+Compose auto-creates the named volumes (`schub_db-data`, `schub_pgadmin-data`) on the first `up`; no separate setup step is needed. (`make volumes-dev` is still available as an idempotent helper if you prefer to create them explicitly first.)
+
+> **Volume safety note:** these are non-external named volumes. `docker compose down -v` (the `-v` flag) will delete them along with all DB data. Plain `docker compose down` is safe — it stops containers but leaves volumes intact. Avoid `down -v` on machines with data you want to keep.
 
 Check that all services are running:
 
@@ -278,7 +270,7 @@ make logs
 
 ---
 
-## Step 6 — Seed the Database
+## Step 5 — Seed the Database
 
 Wait for `auth-service` to be healthy, then:
 
@@ -300,7 +292,7 @@ curl -sk -X POST https://$SERVER_HOST:8000/cases/1/import-csv \
 
 ---
 
-## Step 7 — Configure Firewall
+## Step 6 — Configure Firewall
 
 Expose only HTTPS to LAN clients. All internal service ports remain on the Docker network.
 
@@ -542,16 +534,13 @@ sudo mkdir -p /opt/allocator-csv
 sudo cp /path/to/your/csv/*.csv /opt/allocator-csv/
 ```
 
-Create external volumes (first time only):
-```bash
-make volumes-prod
-```
-
 Pull images and start:
 ```bash
 make prod-pull
 make ps-prod
 ```
+
+> Volumes (`schub_db-data`, `schub_pgadmin-data`, `schub_openclaw-workspace`) are auto-created by compose on first `up`; no separate setup step is needed. `make volumes-prod` is still available as an idempotent helper if you prefer to create them explicitly first. As with dev, plain `make down-prod` is safe; `docker compose down -v` will delete the volumes and the data.
 
 Seed the database (first time only):
 ```bash
@@ -654,7 +643,7 @@ Check which volume is actually mounted:
 ```bash
 docker inspect <db-container> --format '{{json .Mounts}}'
 ```
-The dev stack uses `schub_db-data` (external). If the volume name changed (e.g. after restructuring compose files), data may be in an old volume. Use `docker volume ls` to find it and update the volume declaration in `docker-compose.dev.yml` to point to the correct volume name with `external: true`.
+Both stacks pin the volume to a stable name (`name: schub_db-data` in compose) so existing data is preserved across `up`/`down`/rebuilds. If the data appears empty, the most likely cause is that someone ran `docker compose down -v` (the `-v` flag deletes volumes), or that an *older* version of the compose file used a different volume name and your data is in that old volume. Use `docker volume ls` to find it; you can re-attach by changing the `name:` in `docker-compose.dev.yml` to match.
 
 ### `make down` / `make ps` / `make logs` fails with "no such file: .env.dev" on the VM
 These targets use the dev env file. On the VM (prod), use the prod variants:
