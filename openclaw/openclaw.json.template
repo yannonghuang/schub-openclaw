@@ -143,36 +143,20 @@
   "mcp": {
     "servers": {
       "order-engine": {
-        "command": "supergateway",
-        "args": [
-          "--sse",
-          "http://mcp-server:9500/sse/order_engine/sse"
-        ],
-        "transport": "stdio"
+        "url": "http://mcp-server:9500/sse/order_engine/sse",
+        "transport": "sse"
       },
       "material-engine": {
-        "command": "supergateway",
-        "args": [
-          "--sse",
-          "http://mcp-server:9500/sse/material_engine/sse"
-        ],
-        "transport": "stdio"
+        "url": "http://mcp-server:9500/sse/material_engine/sse",
+        "transport": "sse"
       },
       "supply-chain-engine": {
-        "command": "supergateway",
-        "args": [
-          "--sse",
-          "http://mcp-server:9500/sse/supply_chain_engine/sse"
-        ],
-        "transport": "stdio"
+        "url": "http://mcp-server:9500/sse/supply_chain_engine/sse",
+        "transport": "sse"
       },
       "mes-engine": {
-        "command": "supergateway",
-        "args": [
-          "--sse",
-          "http://mcp-server:9500/sse/mes_engine/sse"
-        ],
-        "transport": "stdio"
+        "url": "http://mcp-server:9500/sse/mes_engine/sse",
+        "transport": "sse"
       }
     }
   },
