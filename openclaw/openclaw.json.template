@@ -179,26 +179,10 @@
   },
   "channels": {
     "telegram": {
-      "enabled": true,
-      "dmPolicy": "pairing",
-      "botToken": "${TELEGRAM_BOT_TOKEN}",
-      "groupPolicy": "allowlist",
-      "streaming": "partial"
+      "enabled": false
     },
     "slack": {
-      "mode": "socket",
-      "webhookPath": "/slack/events",
-      "enabled": true,
-      "botToken": "${SLACK_BOT_TOKEN}",
-      "appToken": "${SLACK_APP_TOKEN}",
-      "userTokenReadOnly": true,
-      "groupPolicy": "allowlist",
-      "streaming": "partial",
-      "nativeStreaming": true,
-      "dmPolicy": "open",
-      "allowFrom": [
-        "*"
-      ]
+      "enabled": false
     }
   },
   "gateway": {
@@ -251,7 +235,7 @@
   "plugins": {
     "entries": {
       "telegram": {
-        "enabled": true
+        "enabled": false
       },
       "bonjour": {
         "enabled": false
