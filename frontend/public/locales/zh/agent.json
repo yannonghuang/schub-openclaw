@@ -53,6 +53,18 @@
       "rejected": "计划推广已被人工拒绝 — 正在取消",
       "resendingApproval": "人工请求更多信息 — 重新发送详情...",
       "complete": "计划工作流完成"
+    },
+    "scheduling": {
+      "analysisStarted": "停产影响分析已开始",
+      "executionStarted": "正在执行停产变更...",
+      "promoting": "正在推广应急计划...",
+      "promoted": "应急计划已推广",
+      "autoApproved": "已自动批准（零影响）",
+      "composingApproval": "正在撰写维护审批请求...",
+      "awaitingApproval": "审批邮件已发送 — 等待人工确认...",
+      "optionsPresented": "已向用户展示方案",
+      "rejected": "维护窗口已被拒绝 — 正在取消",
+      "complete": "停产工作流完成"
     }
   },
   "run": {

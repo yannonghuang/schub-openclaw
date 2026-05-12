@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback, type ReactNode } from "react";
 import { useRouter } from "next/router";
 import { Resizable } from "re-resizable";
 import { useTranslation } from "next-i18next/pages";
@@ -81,7 +81,7 @@ function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowAct
         const isWaiting = level === "waiting";
         const activeStep = workflowActive && isLast;
 
-        let indicator: React.ReactNode;
+        let indicator: ReactNode;
         if (activeStep && isWaiting) {
           indicator = <span className="text-blue-400 flex-shrink-0 animate-pulse">⏳</span>;
         } else if (activeStep && !isDetail) {
@@ -134,20 +134,106 @@ const TERMINAL_STEPS = new Set<string>([
   "trace.material.complete",
   "trace.material.negotiationAbandoned",
   "trace.material.baselineDrifted",
+  "trace.scheduling.complete",
+  "trace.scheduling.rejected",
 ]);
+
+// Strip HTML comments (e.g. <!-- <pending_option_b> ... --> agent anchors)
+// before rendering. The anchor stays in the session JSONL so the agent's
+// resume-on-history scan can still find it; only the visible chat hides it.
+function stripAgentAnchors(s: string): string {
+  return s.replace(/<!--[\s\S]*?-->/g, "").replace(/\n{3,}/g, "\n\n").trim();
+}
 
 function normalizeContent(raw: any, isStreaming = false): string {
   if (!raw) return "";
   if (typeof raw === "object") return JSON.stringify(raw, null, 2);
   if (typeof raw === "string") {
-    if (isStreaming) return raw;
+    if (isStreaming) return stripAgentAnchors(raw);
     try {
       return JSON.stringify(JSON.parse(raw), null, 2);
     } catch {
-      return raw;
+      return stripAgentAnchors(raw);
     }
   }
   return String(raw);
+}
+
+// Parse the alignment cell of a markdown table separator row (`---`, `:---`,
+// `:---:`, `---:`) into a Tailwind text-alignment class.
+function parseAlignment(spec: string): string {
+  const s = spec.trim();
+  const left = s.startsWith(":");
+  const right = s.endsWith(":");
+  if (left && right) return "text-center";
+  if (right) return "text-right";
+  return "text-left";  // default = left (also covers `---`)
+}
+
+// Split a markdown table row "| a | b | c |" into cell strings.
+function parseRow(line: string): string[] {
+  return line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
+}
+
+// Render a string that may contain markdown tables as JSX. Non-table runs are
+// returned as plain text (whitespace-pre-wrap preserves their formatting via
+// the parent div); table blocks are rendered as proper <table> elements with
+// per-column alignment honoured.
+function renderContent(content: string): ReactNode {
+  const lines = content.split("\n");
+  const out: ReactNode[] = [];
+  let i = 0;
+  let proseBuf: string[] = [];
+  const flushProse = () => {
+    if (proseBuf.length === 0) return;
+    out.push(<span key={`p-${out.length}`}>{proseBuf.join("\n")}</span>);
+    proseBuf = [];
+  };
+  while (i < lines.length) {
+    const line = lines[i];
+    // Detect markdown table: header row `| ... |` followed by separator `|---|---|`
+    const isPipeRow = (s: string) => /^\s*\|.*\|\s*$/.test(s);
+    const isSeparatorRow = (s: string) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(s);
+    if (i + 1 < lines.length && isPipeRow(line) && isSeparatorRow(lines[i + 1])) {
+      flushProse();
+      const headers = parseRow(line);
+      const aligns = parseRow(lines[i + 1]).map(parseAlignment);
+      const rows: string[][] = [];
+      let j = i + 2;
+      while (j < lines.length && isPipeRow(lines[j])) {
+        rows.push(parseRow(lines[j]));
+        j++;
+      }
+      out.push(
+        <div key={`t-${out.length}`} className="my-2 overflow-x-auto">
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                {headers.map((h, k) => (
+                  <th key={k} className={`px-2 py-1 font-medium text-gray-700 ${aligns[k] || "text-left"}`}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, ri) => (
+                <tr key={ri} className="border-b border-gray-100 last:border-b-0">
+                  {r.map((c, ci) => (
+                    <td key={ci} className={`px-2 py-1 ${aligns[ci] || "text-left"}`}>{c}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      i = j;
+      continue;
+    }
+    proseBuf.push(line);
+    i++;
+  }
+  flushProse();
+  return <>{out}</>;
 }
 
 function formatTs(iso?: string): string {
@@ -210,7 +296,7 @@ function MessageTable({ height, onHeightChange, isLoading, messages, steps, work
                   : "bg-white text-gray-800 border border-gray-200 rounded-bl-sm"
               }`}>
                 <div className="whitespace-pre-wrap break-words leading-relaxed">
-                  {normalizeContent(m.content, isStreamingThis)}
+                  {renderContent(normalizeContent(m.content, isStreamingThis))}
                 </div>
                 {m.created_at && (
                   <div className={`text-[10px] mt-1 tabular-nums ${isUser ? "text-blue-100" : "text-gray-400"}`}>
@@ -394,17 +480,16 @@ export default function Agent({
         })
       );
     },
-    // onHITLReply — human email reply: resume OpenClaw via /agui/chat
+    // onHITLReply — human email reply: resume OpenClaw via /agui/chat.
+    // Submit the plain reply text rather than a JSON envelope so it renders
+    // as a normal user-message bubble in the chat UI instead of raw JSON.
+    // The agent classifies approve/reject from the text itself; the
+    // pending-state file in /tmp tells it that an HITL reply is being awaited.
     async (event: HITLReplyEvent) => {
       if (!resolvedThreadId) return;
       console.log("[Agent] HITLReply → resuming via /agui/chat");
-      await submit(
-        JSON.stringify({
-          type: "email_received",
-          approved: event.value.approved,
-          raw_email: event.value.messageContent,
-        })
-      );
+      const replyText = (event.value.messageContent || "").trim() || (event.value.approved ? "approve" : "cancel");
+      await submit(replyText);
     }
   );
 

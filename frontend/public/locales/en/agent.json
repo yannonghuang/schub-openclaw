@@ -53,6 +53,18 @@
       "rejected": "Plan promotion rejected by human — cancelling",
       "resendingApproval": "Human requested more info — resending with details...",
       "complete": "Planning workflow complete"
+    },
+    "scheduling": {
+      "analysisStarted": "Scheduling analysis started",
+      "executionStarted": "Executing scheduling change...",
+      "promoting": "Promoting contingent plan run...",
+      "promoted": "Contingent plan run promoted",
+      "autoApproved": "Auto-approved (zero impact)",
+      "composingApproval": "Composing maintenance approval request...",
+      "awaitingApproval": "Approval email sent — awaiting human confirmation...",
+      "optionsPresented": "Options presented to user",
+      "rejected": "Maintenance window rejected — cancelling",
+      "complete": "Scheduling workflow complete"
     }
   },
   "run": {
