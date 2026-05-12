@@ -558,6 +558,62 @@ def _allocator_url() -> str:
     return os.environ.get(_ALLOCATOR_ENV_KEY, _ALLOCATOR_DEFAULT)
 
 
+# Per-case cache of the most recent assess_maintenance_options result. Populated
+# inside assess_maintenance_options on success; consumed by commit_option_pick
+# on the user's resume turn. Keys are case_id (int); values store the three CPR
+# ids, the alt-start date, prod_area, delay_days, locale, and a capture
+# timestamp. Modeled after the Kotlin pendingMaintenance map in the allocator's
+# planning agent. Lives in process memory only — the mcp-server is per-deploy
+# stateful and a restart wipes the cache, in which case commit_option_pick
+# returns no_pending_maintenance and the agent re-runs assess.
+import time as _time
+
+_PENDING_MAINT_TTL_SEC = 30 * 60  # 30 min, matches Kotlin side
+_pending_maintenance: Dict[int, Dict[str, Any]] = {}
+
+
+def _remember_pending_maintenance(
+    case_id: int,
+    *,
+    prod_area: str,
+    bucket_start: str,
+    delay_days: int,
+    alternate_start_date: Any,
+    option_a_cpr_id: Any,
+    option_b_cpr_id: Any,
+    option_c_cpr_id: Any,
+    option_b_status: str,
+    locale: str,
+) -> None:
+    _pending_maintenance[int(case_id)] = {
+        "case_id": int(case_id),
+        "prod_area": prod_area,
+        "bucket_start": bucket_start,
+        "delay_days": int(delay_days),
+        "alternate_start_date": alternate_start_date,
+        "option_a_cpr_id": option_a_cpr_id,
+        "option_b_cpr_id": option_b_cpr_id,
+        "option_c_cpr_id": option_c_cpr_id,
+        "option_b_status": option_b_status,
+        "locale": locale,
+        "captured_at": _time.time(),
+    }
+
+
+def _load_pending_maintenance(case_id: int) -> Dict[str, Any] | None:
+    entry = _pending_maintenance.get(int(case_id))
+    if not entry:
+        return None
+    if _time.time() - entry.get("captured_at", 0) > _PENDING_MAINT_TTL_SEC:
+        _pending_maintenance.pop(int(case_id), None)
+        return None
+    return entry
+
+
+def _clear_pending_maintenance(case_id: int) -> None:
+    _pending_maintenance.pop(int(case_id), None)
+
+
 async def _resolve_ids(case_id: Any, plan_run_id: Any) -> Dict[str, Any]:
     """
     Call allocator's GET /resolve to fill in (case_id, plan_run_id) when either
@@ -913,25 +969,31 @@ async def analyze_wo_schedule_impact(payload: Dict[str, Any]):
         return {"error": "delay_days and delay_to_date are mutually exclusive"}
 
     persist = bool(data.get("persist", False))
-    if not persist:
-        # Guard: scheduling agent has no legitimate use case for persist=false.
-        # Branch A and Branch C both call this tool exactly once with persist=true
-        # AFTER user confirmation. Calling with persist=false is the "preview without
-        # committing" improvisation that prevents any contingent plan run from being
-        # created. The bundled assess_maintenance_options is the right tool for
-        # any preview-shaped need.
-        return {
-            "error": "persist_false_disallowed",
-            "hint": (
-                "analyze_wo_schedule_impact may only be called with persist=true, "
-                "and only after the user has confirmed an option. For Branch B "
-                "(delay_days > maxFeasibleDays without prior user accept_impact), "
-                "call assess_maintenance_options instead — it atomically generates "
-                "all three contingent plan runs (Options A, B, C) and returns their "
-                "ids so the user can pick one to promote on the next turn."
-            ),
-            "redirect_tool": "assess_maintenance_options",
-        }
+    # Guard: refuse ALL agent-loop calls to analyze_wo_schedule_impact, regardless
+    # of persist. The scheduling agent has two legitimate code paths:
+    #   - Branch A (safe path)         → execute_safe_plan (atomic + auto-promote)
+    #   - Branch B (multi-option flow) → assess_maintenance_options (generates A/B/C
+    #                                    CPRs atomically) + commit_option_pick on
+    #                                    resume.
+    # Direct analyze_wo_schedule_impact calls bypass these and lead to the agent
+    # generating a stray CPR (persist=true) or fabricating impact narratives
+    # (persist=false), then mis-promoting on the next turn. The bundled tools own
+    # the contingent lifecycle; this raw tool is now MCP-internal only.
+    _ = persist  # parsed for future internal use; not relevant to the guard return
+    return {
+        "error": "use_assess_maintenance_options_or_execute_safe_plan_instead",
+        "hint": (
+            "analyze_wo_schedule_impact is not available to the agent loop. "
+            "For Branch A (delay_days ≤ max_feasible_days), call execute_safe_plan. "
+            "For Branch B (delay_days > max_feasible_days, multi-option), call "
+            "assess_maintenance_options to atomically generate Options A/B/C, then "
+            "commit_option_pick(option_letter) on the user's pick turn — it reads "
+            "the cached CPR ids and promotes the right one (or deletes A+C on "
+            "Option B no-op). Generating a fresh CPR here and promoting it bypasses "
+            "the option-aligned lifecycle and corrupts the active schedule."
+        ),
+        "redirect_tool": "assess_maintenance_options",
+    }
 
     body: Dict[str, Any] = {
         "caseId": int(case_id),
@@ -1332,6 +1394,25 @@ async def assess_maintenance_options(payload: Dict[str, Any]):
             else:
                 option_b_paragraph = None
 
+            option_a_cpr_id = option_a.get("contingentPlanRunId") if option_a else None
+            option_c_cpr_id = option_c.get("contingentPlanRunId")
+
+            # Cache the three CPR ids + context so the user's resume turn can
+            # dispatch deterministically via commit_option_pick(option_letter)
+            # without the agent having to chain analyze + promote itself.
+            _remember_pending_maintenance(
+                case_id=int(case_id),
+                prod_area=str(prod_area),
+                bucket_start=str(bucket_start),
+                delay_days=int(delay_days),
+                alternate_start_date=alt_start,
+                option_a_cpr_id=option_a_cpr_id,
+                option_b_cpr_id=option_b_cpr_id,
+                option_c_cpr_id=option_c_cpr_id,
+                option_b_status=option_b_status,
+                locale=str(data.get("locale") or "en"),
+            )
+
             return {
                 "caseId": case_id,
                 "planRunId": plan_run_id,
@@ -1344,9 +1425,9 @@ async def assess_maintenance_options(payload: Dict[str, Any]):
                 "alternateStartDate": alt_start,
                 "bottleneckGid": bottleneck_gid,
                 "bottleneckEnd": bottleneck_end,
-                "optionACprId": option_a.get("contingentPlanRunId") if option_a else None,
+                "optionACprId": option_a_cpr_id,
                 "optionBCprId": option_b_cpr_id,
-                "optionCCprId": option_c.get("contingentPlanRunId"),
+                "optionCCprId": option_c_cpr_id,
                 "optionBStatus": option_b_status,
                 "optionBParagraph": option_b_paragraph,
                 "impactedDemandCount": option_c.get("impactedDemandCount", 0),
@@ -1472,6 +1553,11 @@ async def promote_plan_run(payload: Dict[str, Any]):
     case_id and plan_run_id are auto-resolved if omitted, but for safety the
     agent should ALWAYS pass plan_run_id explicitly to promote — never trust
     the active-run fallback for a destructive operation.
+
+    For the maintenance-window option-pick resume turn, PREFER
+    commit_option_pick(option_letter) — it dispatches the correct CPR from
+    the cached assessment and handles Option B's no_op_at_alt_start case
+    (no promote, just cleanup).
     """
     import httpx
 
@@ -1492,6 +1578,210 @@ async def promote_plan_run(payload: Dict[str, Any]):
             return r.json()
     except Exception as exc:
         return {"error": f"allocator unavailable: {exc}"}
+
+
+@mcp_scheduling_engine.tool()
+async def commit_option_pick(payload: Dict[str, Any]):
+    """
+    Deterministic handler for the resume turn of the maintenance-window flow.
+    Given the user's pick (A/B/C), reads the cached pending_maintenance_decision
+    from the most recent assess_maintenance_options call and dispatches the
+    right action: promotes the correct option's contingent plan run, deletes
+    the two unchosen contingents, and returns a deterministic confirmation —
+    all in one call. Handles Option B's no_op_at_alt_start case correctly by
+    deleting the unchosen contingents WITHOUT promoting anything (the existing
+    plan already accommodates the deferred maintenance window).
+
+    Use this instead of chaining analyze_wo_schedule_impact + promote_plan_run
+    by hand on the resume turn — the prior hand-chained path mis-promoted
+    Option C's CPR as if it were Option B's deferred plan, AND generated stray
+    CPRs that silently corrupted the active schedule.
+
+    IMPORTANT:
+    - All inputs MUST be wrapped inside a top-level key named "payload".
+    - Example tool call:
+
+    {
+      "payload": {
+        "option_letter": "A"
+      }
+    }
+
+    option_letter must be one of "A", "B", "C" (uppercase).
+
+    case_id is auto-resolved from the pending decision in the cache; you do
+    not need to pass it.
+
+    Returns:
+      {
+        "picked_option": "A" | "B" | "C",
+        "promoted_plan_run_id": <int or null>,   // null when B picked in no_op state
+        "deleted_unchosen": [<int>, ...],
+        "status": "ok" | "no_op_at_alt_start",
+        "confirmation": "<locale-rendered confirmation string for the user>"
+      }
+    Or { "error": ..., "hint": ... } on bad pick / stale cache.
+    """
+    import httpx
+
+    data = dict(payload)
+    raw_letter = data.get("option_letter")
+    if not isinstance(raw_letter, str) or raw_letter.strip().upper() not in {"A", "B", "C"}:
+        return {
+            "error": "invalid_option_letter",
+            "hint": "option_letter must be one of 'A', 'B', 'C'.",
+        }
+    letter = raw_letter.strip().upper()
+
+    # The cache is the source of truth — case_id and the three CPR ids come
+    # from there, not from the payload. (Agent-supplied case_id would let it
+    # accidentally commit on a different case.)
+    resolved = await _resolve_ids(data.get("case_id"), None)
+    if "error" in resolved:
+        return resolved
+    case_id = int(resolved["caseId"])
+    pending = _load_pending_maintenance(case_id)
+    if pending is None:
+        return {
+            "error": "no_pending_maintenance",
+            "hint": (
+                "There is no cached maintenance-window assessment for this case. "
+                "Re-run assess_maintenance_options first, then commit_option_pick."
+            ),
+        }
+
+    option_a = pending.get("option_a_cpr_id")
+    option_b = pending.get("option_b_cpr_id")
+    option_c = pending.get("option_c_cpr_id")
+    alt_start = pending.get("alternate_start_date")
+    option_b_status = pending.get("option_b_status")
+    prod_area = pending.get("prod_area") or "?"
+    delay_days = pending.get("delay_days")
+    locale = (pending.get("locale") or "en").lower()
+    zh = locale.startswith("zh")
+
+    async def _delete(client, run_id):
+        if run_id is None:
+            return False
+        try:
+            r = await client.delete(f"{_allocator_url()}/cases/{case_id}/plan-runs/{int(run_id)}")
+            return r.status_code in (200, 204)
+        except Exception:
+            return False
+
+    async def _promote(client, run_id):
+        r = await client.post(f"{_allocator_url()}/cases/{case_id}/plan-runs/{int(run_id)}/promote")
+        if r.status_code in (200, 201):
+            return True, None
+        try:
+            return False, r.json()
+        except Exception:
+            return False, {"error": f"HTTP {r.status_code}", "detail": r.text}
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        if letter == "A":
+            if option_a is None:
+                return {"error": "option_a_not_available"}
+            ok, err = await _promote(client, option_a)
+            if not ok:
+                return {"error": "promote_failed", "picked_option": "A", "plan_run_id": option_a, "detail": err}
+            unchosen = [r for r in (option_b, option_c) if r and r != option_a]
+            deleted = []
+            for r in unchosen:
+                if await _delete(client, r):
+                    deleted.append(int(r))
+            _clear_pending_maintenance(case_id)
+            confirmation = (
+                f"✓ 选项 A 已确认 — 计划运行 #{option_a} 现为正式计划。"
+                if zh else
+                f"✓ Option A committed — plan run #{option_a} is now the active plan."
+            )
+            return {
+                "picked_option": "A",
+                "status": "ok",
+                "promoted_plan_run_id": int(option_a),
+                "deleted_unchosen": deleted,
+                "confirmation": confirmation,
+            }
+
+        if letter == "B":
+            if option_b is not None and option_b_status == "ok":
+                ok, err = await _promote(client, option_b)
+                if not ok:
+                    return {"error": "promote_failed", "picked_option": "B", "plan_run_id": option_b, "detail": err}
+                unchosen = [r for r in (option_a, option_c) if r and r != option_b]
+                deleted = []
+                for r in unchosen:
+                    if await _delete(client, r):
+                        deleted.append(int(r))
+                _clear_pending_maintenance(case_id)
+                confirmation = (
+                    f"✓ 选项 B 已确认 — 推迟至 {alt_start} 起 {delay_days} 天；计划运行 #{option_b} 现为正式计划。"
+                    if zh else
+                    f"✓ Option B committed — deferred to {alt_start} for {delay_days} days; plan run #{option_b} is now the active plan."
+                )
+                return {
+                    "picked_option": "B",
+                    "status": "ok",
+                    "promoted_plan_run_id": int(option_b),
+                    "deleted_unchosen": deleted,
+                    "confirmation": confirmation,
+                }
+            if option_b_status == "no_op_at_alt_start" and alt_start:
+                # Existing plan already accommodates the deferred window. No
+                # promote; delete the unchosen contingents and confirm.
+                to_delete = [r for r in (option_a, option_c) if r]
+                deleted = []
+                for r in to_delete:
+                    if await _delete(client, r):
+                        deleted.append(int(r))
+                _clear_pending_maintenance(case_id)
+                confirmation = (
+                    f"✓ 选项 B 已确认 — {prod_area} 维护窗口安排于 {alt_start} 起 {delay_days} 天。"
+                    f"现行计划已可容纳此窗口，无需变更计划，也未生成新的计划运行。"
+                    if zh else
+                    f"✓ Option B committed — {prod_area} maintenance window scheduled for {alt_start} for {delay_days} days. "
+                    f"The existing plan already accommodates this window; no plan change is needed and no new plan run was generated."
+                )
+                return {
+                    "picked_option": "B",
+                    "status": "no_op_at_alt_start",
+                    "promoted_plan_run_id": None,
+                    "deleted_unchosen": deleted,
+                    "confirmation": confirmation,
+                }
+            return {
+                "error": "option_b_not_available",
+                "hint": (
+                    "Option B was not available in the cached assessment "
+                    "(no_safe_start_within_horizon). Ask the user to pick A or C."
+                ),
+            }
+
+        # letter == "C"
+        if option_c is None:
+            return {"error": "option_c_not_available"}
+        ok, err = await _promote(client, option_c)
+        if not ok:
+            return {"error": "promote_failed", "picked_option": "C", "plan_run_id": option_c, "detail": err}
+        unchosen = [r for r in (option_a, option_b) if r and r != option_c]
+        deleted = []
+        for r in unchosen:
+            if await _delete(client, r):
+                deleted.append(int(r))
+        _clear_pending_maintenance(case_id)
+        confirmation = (
+            f"✓ 选项 C 已确认 — 接受影响；计划运行 #{option_c} 现为正式计划。"
+            if zh else
+            f"✓ Option C committed — impact accepted; plan run #{option_c} is now the active plan."
+        )
+        return {
+            "picked_option": "C",
+            "status": "ok",
+            "promoted_plan_run_id": int(option_c),
+            "deleted_unchosen": deleted,
+            "confirmation": confirmation,
+        }
 
 
 # ---------------------------

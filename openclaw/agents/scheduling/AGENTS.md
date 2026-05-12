@@ -317,65 +317,48 @@ Trace `trace.scheduling.optionsPresented` (major). End turn returning
 
 On the next turn after presenting options, parse the reply (1 / 一 / A / 选 1
 → Option A; same for 2/B; 3/C → Option C; treat free-form "shorten" / "缩短"
-as A, "defer" / "推迟" as B, "accept" / "接受" as C). Read the corresponding
-`option_X_cpr_id` from the `<pending_maintenance_decision>` anchor.
+as A, "defer" / "推迟" as B, "accept" / "接受" as C).
 
-🛑 **Recovery: missing or null CPR id in the anchor.** If the anchor is
-absent, or the `option_X_cpr_id` for the picked option is missing/null/empty,
-the prior turn failed to generate contingents (this is the failure mode the
-Branch B Step B.1 directive guards against). Do **not** fabricate a "shutdown
-confirmed" reply. Instead:
-1. Apologize briefly in LOCALE ("Sorry — the previous assessment didn't
-   persist contingent runs; re-running.").
-2. Re-execute Branch B from Step B.1 with the parameters from the previous
-   anchor (or re-parse them from the prior user message).
-3. Present options again with the fresh CPR ids.
-4. End turn with `awaiting_option_pick`. The user will re-pick.
+🛑 **MANDATORY: call `commit_option_pick({option_letter})` — the ONLY tool
+call on the resume turn.** It reads the cached CPR ids from the most recent
+`assess_maintenance_options` invocation, dispatches the right action
+(promote chosen + delete unchosen, OR for Option B no_op_at_alt_start just
+delete A+C without promoting), and returns a deterministic `confirmation`
+string in the user's locale plus a structured result. Emit the
+`confirmation` field as your reply.
 
-- **Option B with `option_b_status="no_op_at_alt_start"`** (the deferral fits
-  cleanly into the existing plan, no CPR was generated) → there is nothing
-  to promote. Delete only the two unchosen contingents (`option_a_cpr_id`
-  and `option_c_cpr_id`), confirm the maintenance window to the user, and
-  emit the report email noting "no plan change needed". Do **not** attempt
-  to promote `option_b_cpr_id` — it is null.
-  ```
-  exec curl -s -X DELETE http://allocator-backend:8000/cases/CASE_ID/plan-runs/UNCHOSEN_CPR_A
-  exec curl -s -X DELETE http://allocator-backend:8000/cases/CASE_ID/plan-runs/UNCHOSEN_CPR_C
-  ```
-  Trace `confirmed_no_op` (major) + `cleaned_unchosen` (detail). Go to Phase 3
-  with outcome=`no_op_confirmed`. The Phase 3 outcome line should read
-  `Outcome: NO-IMPACT (no plan change required)` so downstream sees an explicit
-  signal, not silence.
+Do NOT call `promote_plan_run` + `delete_plan_run` by hand; do NOT call
+`analyze_wo_schedule_impact` to "regenerate" the option's CPR. Both
+patterns mis-promote a fresh CPR as if it were the cached one and leave
+the cached contingents undeleted — the exact failure mode this tool
+exists to prevent.
 
-- **Option A or B with `option_b_status="ok"`** (no demand impact, WO schedule
-  still shifts) → promote the cached CPR, then delete the two unchosen
-  contingents. **Always promote** — the user picked this option because they
-  want the WO schedule shift to take effect. "Zero demand impact" is NOT a
-  reason to skip promotion; it only means the customer-facing commits are
-  preserved. Skipping promotion here leaves the baseline plan in place and
-  the maintenance window is never recorded — silent failure.
-  ```
-  exec curl -s -X POST http://allocator-backend:8000/cases/CASE_ID/plan-runs/CHOSEN_CPR/promote -H 'Content-Type: application/json'
-  exec curl -s -X DELETE http://allocator-backend:8000/cases/CASE_ID/plan-runs/UNCHOSEN_CPR_1
-  exec curl -s -X DELETE http://allocator-backend:8000/cases/CASE_ID/plan-runs/UNCHOSEN_CPR_2
-  ```
-  (Use the two `option_*_cpr_id` values from the anchor that AREN'T the chosen
-  one.) Trace `promoted` (major) + `cleaned_unchosen` (detail). Go to Phase 3.
-  The unchosen contingents must NOT linger in 'contingent' status — they
-  clutter the run-history list and are no longer needed once the user picked.
+Result handling:
+- `status="ok"`, `promoted_plan_run_id` non-null → standard promote outcome.
+- `status="no_op_at_alt_start"`, `promoted_plan_run_id=null` → Option B
+  picked when the existing plan already accommodates the deferred window;
+  no plan change needed. Surface this clearly in the reply.
+- `error="option_X_not_available"` → tell the user that option wasn't
+  available and ask them to pick a different one. Do NOT improvise.
+- `error="no_pending_maintenance"` → cache expired (TTL 30 min) or
+  mcp-server restarted. Apologize, re-run Branch B from Step B.1.
 
-  🛑 **Forbidden response shapes after Option A/B pick:**
-  - "No plan change required" — wrong; the CPR shift IS the plan change.
-  - "Maintenance can proceed freely as planned" — wrong; the existing plan
-    doesn't reflect the shifted WO schedule yet.
-  - "Already scheduled — no action needed" — wrong; the CPR is in `contingent`
-    status until you promote it.
-
-- **Option C** (demand impact) → HITL email gate, same flow as Branch C below
-  but using `option_c_cpr_id` as the contingent id. After the APPROVED reply
-  promotes Option C, delete the two unchosen contingents the same way.
+- **Option C** (demand impact, no HITL on this branch) → `commit_option_pick`
+  returns immediately. If your business requires the HITL email gate on
+  Option C even in Branch B-resume, send the approval email before calling
+  commit_option_pick (and only call it after APPROVED).
 
 - Ambiguous reply → ask one clarifying question; terminate.
+
+🛑 **Forbidden response shapes after any option pick:**
+- "No plan change required" — only valid when the tool returned
+  `status="no_op_at_alt_start"`. Never say this when a promote actually
+  happened.
+- "Generated new plan run #N" — wrong; `commit_option_pick` promotes a
+  PRE-EXISTING cached CPR. It does not generate one. If you ever find
+  yourself describing a freshly-generated CPR on the resume turn, you
+  bypassed `commit_option_pick` and are off-script.
+- "Maintenance can proceed freely as planned" — never use.
 
 #### Branch C — `delay_days > maxFeasibleDays` AND `accept_impact == true`
 
