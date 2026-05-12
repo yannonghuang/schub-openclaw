@@ -87,6 +87,47 @@
             "maxTokens": 8192
           }
         ]
+      },
+      "openai": {
+        "baseUrl": "https://api.openai.com/v1",
+        "apiKey": "${OPENAI_API_KEY}",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "gpt-4o",
+            "name": "GPT-4o",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 128000,
+            "maxTokens": 16384
+          },
+          {
+            "id": "gpt-4o-mini",
+            "name": "GPT-4o Mini",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 128000,
+            "maxTokens": 16384
+          }
+        ]
       }
     }
   },
@@ -112,6 +153,7 @@
             "order",
             "material",
             "planning",
+            "scheduling",
             "wip"
           ]
         }
@@ -135,6 +177,10 @@
         "workspace": "/home/node/.openclaw/agents/planning"
       },
       {
+        "id": "scheduling",
+        "workspace": "/home/node/.openclaw/agents/scheduling"
+      },
+      {
         "id": "wip",
         "workspace": "/home/node/.openclaw/agents/wip"
       }
@@ -156,6 +202,10 @@
       },
       "mes-engine": {
         "url": "http://mcp-server:9500/sse/mes_engine/sse",
+        "transport": "sse"
+      },
+      "scheduling-engine": {
+        "url": "http://mcp-server:9500/sse/scheduling_engine/sse",
         "transport": "sse"
       }
     }

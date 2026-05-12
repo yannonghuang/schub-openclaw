@@ -22,6 +22,7 @@ from engines import (
     mcp_mes_engine,
     mcp_order_engine,
     mcp_material_engine,
+    mcp_scheduling_engine,
 )
 
 # ---------------------------
@@ -78,22 +79,24 @@ class APIKeyMiddleware:
 # ---------------------------
 
 # Streamable HTTP (existing)
-mcp_http          = mcp.streamable_http_app()
-mcp_http_sc       = mcp_supply_chain_engine.streamable_http_app()
-mcp_http_mes      = mcp_mes_engine.streamable_http_app()
-mcp_http_order    = mcp_order_engine.streamable_http_app()
-mcp_http_material = mcp_material_engine.streamable_http_app()
+mcp_http            = mcp.streamable_http_app()
+mcp_http_sc         = mcp_supply_chain_engine.streamable_http_app()
+mcp_http_mes        = mcp_mes_engine.streamable_http_app()
+mcp_http_order      = mcp_order_engine.streamable_http_app()
+mcp_http_material   = mcp_material_engine.streamable_http_app()
+mcp_http_scheduling = mcp_scheduling_engine.streamable_http_app()
 
 # SSE (new)
-mcp_sse          = mcp.sse_app()
-mcp_sse_sc       = mcp_supply_chain_engine.sse_app()
-mcp_sse_mes      = mcp_mes_engine.sse_app()
-mcp_sse_order    = mcp_order_engine.sse_app()
-mcp_sse_material = mcp_material_engine.sse_app()
+mcp_sse            = mcp.sse_app()
+mcp_sse_sc         = mcp_supply_chain_engine.sse_app()
+mcp_sse_mes        = mcp_mes_engine.sse_app()
+mcp_sse_order      = mcp_order_engine.sse_app()
+mcp_sse_material   = mcp_material_engine.sse_app()
+mcp_sse_scheduling = mcp_scheduling_engine.sse_app()
 
 _all_sub_apps = [
-    mcp_http, mcp_http_sc, mcp_http_mes, mcp_http_order, mcp_http_material,
-    mcp_sse,  mcp_sse_sc,  mcp_sse_mes,  mcp_sse_order,  mcp_sse_material,
+    mcp_http, mcp_http_sc, mcp_http_mes, mcp_http_order, mcp_http_material, mcp_http_scheduling,
+    mcp_sse,  mcp_sse_sc,  mcp_sse_mes,  mcp_sse_order,  mcp_sse_material,  mcp_sse_scheduling,
 ]
 
 # ---------------------------
@@ -154,6 +157,7 @@ app.mount("/mcp/supply_chain_engine", mcp_http_sc)
 app.mount("/mcp/mes_engine",          mcp_http_mes)
 app.mount("/mcp/order_engine",        mcp_http_order)
 app.mount("/mcp/material_engine",     mcp_http_material)
+app.mount("/mcp/scheduling_engine",   mcp_http_scheduling)
 app.mount("/mcp",                     mcp_http)
 
 # --- SSE mounts (new paths) ---
@@ -161,6 +165,7 @@ app.mount("/sse/supply_chain_engine", mcp_sse_sc)
 app.mount("/sse/mes_engine",          mcp_sse_mes)
 app.mount("/sse/order_engine",        mcp_sse_order)
 app.mount("/sse/material_engine",     mcp_sse_material)
+app.mount("/sse/scheduling_engine",   mcp_sse_scheduling)
 app.mount("/sse",                     mcp_sse)
 
 # ---------------------------

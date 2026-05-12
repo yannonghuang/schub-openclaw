@@ -55,6 +55,13 @@ http {
         proxy_http_version 1.1;
         proxy_set_header   Upgrade $http_upgrade;
         proxy_set_header   Connection $connection_upgrade;
+        # Planning-agent calls go through the allocator-frontend's API routes
+        # to the allocator-backend, and a single LLM turn (assess_maintenance_options
+        # + reasoning) can take well over the default 60s. Match /v1/ and /switch/
+        # which already use 300s.
+        proxy_connect_timeout 60s;
+        proxy_send_timeout    300s;
+        proxy_read_timeout    300s;
     }
 
     location @allocator_login_redirect {
