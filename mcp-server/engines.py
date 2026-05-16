@@ -1413,6 +1413,27 @@ async def assess_maintenance_options(payload: Dict[str, Any]):
                 locale=str(data.get("locale") or "en"),
             )
 
+            # Pre-render the canonical pending_maintenance_decision anchor so
+            # the agent can paste it verbatim. Without this, models tend to
+            # invent abbreviated/HTML-commented variants (e.g. `<!-- <pending_option_b> ... -->`)
+            # that drop fields commit_option_pick / audit replay need.
+            def _f(v: Any) -> str:
+                return "null" if v is None else str(v)
+            pending_maintenance_anchor = (
+                "<pending_maintenance_decision>\n"
+                f"case_id={_f(case_id)}\n"
+                f"prod_area={_f(prod_area)}\n"
+                f"original_bucket_start={_f(bucket_start)}\n"
+                f"original_delay_days={_f(delay_days)}\n"
+                f"max_feasible_days={_f(max_feasible_days)}\n"
+                f"alternate_start_date={_f(alt_start)}\n"
+                f"option_a_cpr_id={_f(option_a_cpr_id)}\n"
+                f"option_b_cpr_id={_f(option_b_cpr_id)}\n"
+                f"option_b_status={_f(option_b_status)}\n"
+                f"option_c_cpr_id={_f(option_c_cpr_id)}\n"
+                "</pending_maintenance_decision>"
+            )
+
             return {
                 "caseId": case_id,
                 "planRunId": plan_run_id,
@@ -1430,6 +1451,7 @@ async def assess_maintenance_options(payload: Dict[str, Any]):
                 "optionCCprId": option_c_cpr_id,
                 "optionBStatus": option_b_status,
                 "optionBParagraph": option_b_paragraph,
+                "pendingMaintenanceAnchor": pending_maintenance_anchor,
                 "impactedDemandCount": option_c.get("impactedDemandCount", 0),
                 "impacts": option_c.get("impacts", []),
             }

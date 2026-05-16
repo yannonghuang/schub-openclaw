@@ -260,10 +260,11 @@ If the tool returns `{"error": ...}`, surface that to the user verbatim and
 terminate; do **not** fall back to manual orchestration.
 
 🛑 **No editorial summary at the end of the options block.** After Option C,
-the message ends. Do not append a recommendation line like "Option A is the
-clean path", "Option B is not feasible", "I suggest …", "Let me know which
-option you'd like to commit". The user reads the three options and replies
-with a pick.
+the only thing that may appear is the `<pending_maintenance_decision>`
+anchor (see Step B.2 below). Do **not** append a recommendation line like
+"Option A is the clean path", "Option B is not feasible", "I suggest …",
+"Let me know which option you'd like to commit". The user reads the three
+options and replies with a pick.
 
 🛑 **Forbidden narrative patterns** — these encode the wrong scope of check:
 - "The window sits/falls past all active [PROD_AREA] work orders." Wrong — the
@@ -286,8 +287,15 @@ to remove stale contingents — re-assessment will generate fresh CPRs and the
 old ones would otherwise pile up in 'contingent' status.
 
 🛑 **Step B.2 (MANDATORY): emit the `<pending_maintenance_decision>` anchor**
-with ALL three contingent ids — the next turn reads this to know which CPR
-to promote on the user's pick:
+at the END of your message, AFTER the three options. The next turn reads
+this anchor to know which CPR to promote on the user's pick.
+
+**The tool response includes a field named `pendingMaintenanceAnchor` —
+its value is a multi-line string already formatted exactly as required.
+Copy that string verbatim to the bottom of your reply.** No HTML comment
+wrapper, no whitespace changes, no shortened forms.
+
+Expected shape (this is what the server produces in `pendingMaintenanceAnchor`):
 
 ```
 <pending_maintenance_decision>
