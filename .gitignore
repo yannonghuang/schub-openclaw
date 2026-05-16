@@ -32,7 +32,8 @@ openclaw/logs/
 openclaw/subagents/
 openclaw/telegram/
 openclaw/update-check.json
-openclaw/memory/*.sqlite
+openclaw/memory/
+openclaw/plugin-skills/
 openclaw/openclaw.json.bak*
 openclaw/openclaw.json
 openclaw/tasks/runs.sqlite
