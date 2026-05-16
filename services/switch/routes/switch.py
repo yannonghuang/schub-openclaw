@@ -26,6 +26,20 @@ LOCALE_TTL = 30 * 24 * 3600  # 30 days
 router = APIRouter()
 
 
+# Hold strong refs to background tasks. asyncio.create_task only keeps weak
+# refs — without this, a mid-flight task can be GC'd and silently cancelled
+# (CancelledError is a BaseException and won't be caught by `except Exception`),
+# which leaves the AG-UI stream stuck without ever emitting RunFinished.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 # --- Business locale preference ---
 
 class LocaleRequest(BaseModel):
@@ -126,7 +140,7 @@ async def agui_sse(
                     # Inject server-side timestamp into schub/trace events and persist as spans
                     if payload.get("type") == "CustomEvent" and payload.get("name") == "schub/trace":
                         payload.setdefault("timestamp", int(time.time() * 1000))
-                        asyncio.create_task(_persist_trace_span(business_id, payload))
+                        _spawn_background(_persist_trace_span(business_id, payload))
 
                     # Assign monotonic sequence ID
                     seq = await redis_client.incr(f"agui:seq:{business_id}")
@@ -135,8 +149,11 @@ async def agui_sse(
                         f"agui:event:{business_id}:{seq}", AGUI_EVENT_TTL, encoded
                     )
 
-                    print(f"[SSE] → business_id={business_id} seq={seq} type={payload.get('type')}")
+                    etype = payload.get("type")
+                    print(f"[SSE] → business_id={business_id} seq={seq} type={etype}", flush=True)
                     yield f"id: {seq}\ndata: {encoded}\n\n"
+                    if etype in ("RunFinished", "RunError", "TextMessageEnd"):
+                        print(f"[SSE] ← yielded seq={seq} type={etype}", flush=True)
 
     return StreamingResponse(
         event_generator(),
@@ -273,6 +290,7 @@ async def _inject_context(req: AgUIChatRequest) -> list:
 async def _run_agui_chat(req: AgUIChatRequest, run_id: str) -> None:
     """Background task: proxy to OpenClaw SSE and emit AG-UI events into Redis."""
     biz = req.business_id
+    print(f"[agui_chat run={run_id}] enter, model={req.model}", flush=True)
     await _publish_agui(biz, {
         "type": "RunStarted", "runId": run_id, "threadId": req.thread_id,
     })
@@ -286,7 +304,12 @@ async def _run_agui_chat(req: AgUIChatRequest, run_id: str) -> None:
 
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+            # read=180s is the max idle gap between SSE chunks. Long enough to
+            # cover slow tool-use roundtrips on the openclaw side, short enough
+            # to break out if the gateway sends [DONE] but never closes the
+            # connection (and we somehow miss [DONE]) — the read timeout then
+            # raises and the except clause emits RunError so the UI unblocks.
+            timeout=httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
         ) as client:
             async with client.stream(
                 "POST",
@@ -298,62 +321,68 @@ async def _run_agui_chat(req: AgUIChatRequest, run_id: str) -> None:
                 },
                 json={"model": req.model, "messages": await _inject_context(req), "stream": True},
             ) as resp:
-                buffer = ""
-                async for chunk in resp.aiter_bytes():
-                    buffer += chunk.decode("utf-8", errors="replace")
-                    lines = buffer.split("\n")
-                    buffer = lines.pop()
-                    for line in lines:
-                        if not line.startswith("data: "):
-                            continue
-                        data = line[6:].strip()
-                        if data == "[DONE]":
-                            continue
-                        try:
-                            parsed = json.loads(data)
-                        except json.JSONDecodeError:
-                            continue
-                        choices = parsed.get("choices")
-                        if not choices:
-                            continue
-                        delta = choices[0].get("delta", {})
+                # aiter_lines() gives us one line at a time and respects `break`
+                # immediately — so when we see [DONE] we exit without waiting
+                # for another chunk. aiter_bytes() + a flag doesn't work: the
+                # outer iterator blocks inside `await` until upstream yields the
+                # next chunk, which may never come if the gateway sent [DONE]
+                # and went silent without closing the connection.
+                print(f"[agui_chat run={run_id}] stream opened status={resp.status_code}", flush=True)
+                line_count = 0
+                async for line in resp.aiter_lines():
+                    line_count += 1
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data = line[6:].strip()
+                    if data == "[DONE]":
+                        print(f"[agui_chat run={run_id}] got [DONE] after {line_count} lines", flush=True)
+                        break
+                    try:
+                        parsed = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = parsed.get("choices")
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
 
-                        if delta.get("content"):
-                            if not message_started:
-                                message_started = True
-                                await _publish_agui(biz, {
-                                    "type": "TextMessageStart",
-                                    "messageId": message_id,
-                                    "runId": run_id,
-                                    "threadId": req.thread_id,
-                                    "role": "assistant",
-                                })
+                    if delta.get("content"):
+                        if not message_started:
+                            message_started = True
                             await _publish_agui(biz, {
-                                "type": "TextMessageContent",
+                                "type": "TextMessageStart",
                                 "messageId": message_id,
-                                "delta": delta["content"],
+                                "runId": run_id,
+                                "threadId": req.thread_id,
+                                "role": "assistant",
+                            })
+                        await _publish_agui(biz, {
+                            "type": "TextMessageContent",
+                            "messageId": message_id,
+                            "delta": delta["content"],
+                        })
+
+                    for tc in delta.get("tool_calls") or []:
+                        idx = tc.get("index", 0)
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            tc_id = tc.get("id") or str(uuid.uuid4())
+                            tool_call_ids[idx] = tc_id
+                            await _publish_agui(biz, {
+                                "type": "ToolCallStart",
+                                "toolCallId": tc_id,
+                                "toolCallName": fn["name"],
+                                "runId": run_id,
+                                "threadId": req.thread_id,
+                            })
+                        if fn.get("arguments") and idx in tool_call_ids:
+                            await _publish_agui(biz, {
+                                "type": "ToolCallArgs",
+                                "toolCallId": tool_call_ids[idx],
+                                "delta": fn["arguments"],
                             })
 
-                        for tc in delta.get("tool_calls") or []:
-                            idx = tc.get("index", 0)
-                            fn = tc.get("function") or {}
-                            if fn.get("name"):
-                                tc_id = tc.get("id") or str(uuid.uuid4())
-                                tool_call_ids[idx] = tc_id
-                                await _publish_agui(biz, {
-                                    "type": "ToolCallStart",
-                                    "toolCallId": tc_id,
-                                    "toolCallName": fn["name"],
-                                    "runId": run_id,
-                                    "threadId": req.thread_id,
-                                })
-                            if fn.get("arguments") and idx in tool_call_ids:
-                                await _publish_agui(biz, {
-                                    "type": "ToolCallArgs",
-                                    "toolCallId": tool_call_ids[idx],
-                                    "delta": fn["arguments"],
-                                })
-
+        print(f"[agui_chat run={run_id}] exited loop, message_started={message_started}, line_count={line_count}", flush=True)
         if message_started:
             await _publish_agui(biz, {
                 "type": "TextMessageEnd",
@@ -364,10 +393,14 @@ async def _run_agui_chat(req: AgUIChatRequest, run_id: str) -> None:
         await _publish_agui(biz, {
             "type": "RunFinished", "runId": run_id, "threadId": req.thread_id,
         })
+        print(f"[agui_chat run={run_id}] RunFinished published", flush=True)
         await _close_last_span(biz)
+        print(f"[agui_chat run={run_id}] cleanup done", flush=True)
 
-    except Exception as e:
-        print(f"[/agui/chat] Error streaming from OpenClaw: {e}")
+    except BaseException as e:
+        print(f"[agui_chat run={run_id}] EXCEPTION ({type(e).__name__}): {e}", flush=True)
+        if isinstance(e, asyncio.CancelledError):
+            raise
         await _publish_agui(biz, {
             "type": "RunError",
             "message": str(e),
@@ -381,7 +414,7 @@ async def _run_agui_chat(req: AgUIChatRequest, run_id: str) -> None:
 async def agui_chat(req: AgUIChatRequest):
     """Fire-and-forget: start an OpenClaw session and stream AG-UI events to /sse/."""
     run_id = req.run_id or str(uuid.uuid4())
-    asyncio.create_task(_run_agui_chat(req, run_id))
+    _spawn_background(_run_agui_chat(req, run_id))
     return {"status": "accepted", "run_id": run_id}
 
 
