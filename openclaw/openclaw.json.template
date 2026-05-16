@@ -5,14 +5,16 @@
   },
   "auth": {
     "profiles": {
+      "nanogpt:default": {
+        "provider": "nanogpt",
+        "mode": "api_key"
+      },
+
       "ollama:default": {
         "provider": "ollama",
         "mode": "api_key"
       },
-      "openai:default": {
-        "provider": "openai",
-        "mode": "api_key"
-      },
+
       "moonshot:default": {
         "provider": "moonshot",
         "mode": "api_key"
@@ -88,44 +90,54 @@
           }
         ]
       },
-      "openai": {
-        "baseUrl": "https://api.openai.com/v1",
-        "apiKey": "${OPENAI_API_KEY}",
+
+      "nanogpt": {
+        "baseUrl": "https://nano-gpt.com/api/subscription/v1",
+        "apiKey": "${NANOGPT_API_KEY}", 
         "api": "openai-completions",
         "models": [
           {
-            "id": "gpt-4o",
-            "name": "GPT-4o",
-            "reasoning": false,
-            "input": [
-              "text",
-              "image"
-            ],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 128000,
+            "id": "mistralai/devstral-2-123b-instruct-2512",
+            "name": "Devstral 2 123B",
+            "contextWindow": 1000000,
             "maxTokens": 16384
           },
           {
-            "id": "gpt-4o-mini",
-            "name": "GPT-4o Mini",
-            "reasoning": false,
-            "input": [
-              "text",
-              "image"
-            ],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 128000,
+            "id": "minimax/minimax-m2.7",
+            "name": "Claw Medium",
+            "contextWindow": 1000000,
             "maxTokens": 16384
+          },
+          {
+            "id": "deepseek-ai/deepseek-v3.1-terminus",
+            "name": "DeepSeek V3.1 Terminus",
+            "contextWindow": 1000000,
+            "maxTokens": 16384
+          },
+          {
+            "id": "anthropic/claude-3.5-sonnet",
+            "name": "Claude 3.5 Sonnet (Legacy)",
+            "contextWindow": 200000
+          },
+          {
+            "id": "anthropic/claude-sonnet-4.6",
+            "name": "Claude 4.6 Sonnet (Nano)",
+            "contextWindow": 200000
+          },
+          {
+            "id": "anthropic/claude-haiku-4.5",
+            "name": "Claude 4.5 Haiku (Nano)",
+            "contextWindow": 200000
+          },
+          {
+            "id": "openai/gpt-4o",
+            "name": "GPT-4o (Nano)",
+            "contextWindow": 128000
+          },
+          {
+            "id": "openai/gpt-4o-mini",
+            "name": "GPT-4o Mini (Nano)",
+            "contextWindow": 128000
           }
         ]
       }
@@ -133,11 +145,24 @@
   },
   "agents": {
     "defaults": {
-      "model": {
-        "primary": "anthropic/claude-sonnet-4-6"
+      "heartbeat": {
+        "every": "12h",
+        "model": "nanogpt/openai/gpt-4o-mini" 
       },
+
+      "model": {
+        "primary": "nanogpt/minimax/minimax-m2.7",
+        "fallbacks": [
+          "nanogpt/minimax/minimax-m2.7",
+          "nanogpt/deepseek-ai/deepseek-v3.1-terminus",
+          "nanogpt/anthropic/claude-haiku-4.5",
+          "nanogpt/anthropic/claude-sonnet-4.6",
+          "nanogpt/openai/gpt-4o"
+        ]
+      },
+
       "models": {
-        "ollama/glm-4.7-flash": {}
+        "nanogpt/openai/gpt-4o-mini": {}
       },
       "workspace": "/home/node/.openclaw/workspace",
       "subagents": {

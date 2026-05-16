@@ -101,6 +101,8 @@ services:
       - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - NANOGPT_API_KEY=${NANOGPT_API_KEY:-}
+
     depends_on:
       - db
       - redis
@@ -212,6 +214,7 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-openclaw}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      NANOGPT_API_KEY: ${NANOGPT_API_KEY:-}
       OPENCLAW_URL: http://openclaw:18789
       OPENCLAW_TOKEN: ${OPENCLAW_TOKEN}
     depends_on:
