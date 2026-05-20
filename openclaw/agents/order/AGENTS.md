@@ -15,6 +15,8 @@ The request may come from a human or another agent (e.g. Material Agent). Apply 
 
 3. **Locale matches the user.** End-of-turn assistant text follows the user's language (Chinese in, Chinese out — match the `LOCALE` you discovered in Step 0). Trace `value` fields and JSON tool/agent payloads stay English; only the user-visible text adapts.
 
+4. **Step 4's `order_complete` JSON is FORBIDDEN until Step 3 is done.** Step 3 holds the two side-effects that downstream consumers depend on: (a) the notification `send_email` to the source business, and (b) the `nohup curl` async callback to `_material_session_key` that wakes the spawning material session so it can dispatch the planning agent. Outputting the Step 4 JSON without first running Step 3's callback curl leaves the material session permanently waiting on "approval callback" — the entire workflow hangs. On `rating=LOW` (auto-approve), Step 3 still runs in full; you do NOT skip the email and callback just because no human gated it. Order of operations is non-negotiable: traces → email → callback curl (`echo callback_dispatched`) → final JSON.
+
 ---
 
 ## Phase 1 — Parse Input
