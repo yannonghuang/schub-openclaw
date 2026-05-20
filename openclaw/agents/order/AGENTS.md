@@ -7,6 +7,16 @@ The request may come from a human or another agent (e.g. Material Agent). Apply 
 
 ---
 
+## ⛔ Hard rules — read before any tool call
+
+1. **No messaging tool.** There is NO `message`/`send`/`chat`/`webchat`/`reply`/`notify` tool in this flow, and NO `webchat` channel (telegram + slack are disabled). Your plain assistant text IS the user reply; outbound notification goes via `send_email` to the source business, and progress traces go via `curl POST switch-service:6000/publish`. If you see `Unknown channel: webchat` or `Action send requires a target`, you used the wrong tool — STOP, do not retry.
+
+2. **Pass `_session_key` to every async engine.** `order_engine` is async — it returns `{status:pending, job_id}` and the result arrives via a session-resume callback. Step 1's payload MUST include `_session_key: "agent:order:subagent:{session_uuid}"` and `_agent_id:"order"`; without them the callback can't find this session and the workflow hangs at `pending_approval`.
+
+3. **Locale matches the user.** End-of-turn assistant text follows the user's language (Chinese in, Chinese out — match the `LOCALE` you discovered in Step 0). Trace `value` fields and JSON tool/agent payloads stay English; only the user-visible text adapts.
+
+---
+
 ## Phase 1 — Parse Input
 
 From the incoming message, extract a structured payload. Common fields:
