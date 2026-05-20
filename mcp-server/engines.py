@@ -7,7 +7,7 @@ import asyncio
 import operator
 import time
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
@@ -513,7 +513,21 @@ async def _material_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @mcp_material_engine.tool()
-async def material_engine(payload: Dict[str, Any]):
+async def material_engine(
+    business_id: int,
+    supply_id: str,
+    delivery_delay_days: int = 0,
+    quantity_decrease_pct: float = 0.0,
+    event_type: str = "Material",
+    source: int = 1,
+    recipients: Optional[List[int]] = None,
+    message_id: Optional[int] = None,
+    negotiation_round: Optional[int] = None,
+    parent_plan_run_id: Optional[int] = None,
+    session_key: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+):
     """
     Material engine tool. Runs asynchronously — returns immediately with a job
     token; the impact replan can take 4–5 min on large cases, which would
@@ -529,34 +543,41 @@ async def material_engine(payload: Dict[str, Any]):
          `Job <uuid> completed. Result: {"type":"material_complete",...}`.
       3. The agent's Case E classifier picks that up and proceeds to Step 1.5.
 
-    IMPORTANT:
-    - All inputs MUST be wrapped inside a top-level key named "payload".
-    - "payload" must be an object (dictionary).
-    - "_session_key" is injected by the gateway and required for the
-      completion callback to find this agent session.
+    Args are flat (no nested `payload` dict) — LLMs that struggle with
+    deeply-nested tool-call JSON (e.g. minimax-m2.7) emit valid calls this way.
+
+    `session_key` is required so the completion callback can resume the exact
+    agent session. AGENTS.md derives it from session_key.sh as
+    `agent:material:subagent:{session_uuid}`.
 
     Example tool call:
 
     {
-      "payload": {
-        "business_id": 42,
-        "message_id": 100,
-        "type": "Material",
-        "source": 1,
-        "recipients": [1],
-        "supply_id": "100-0018_1000_11/21/2024",
-        "delivery_delay_days": 30,
-        "quantity_decrease_pct": 0
-      }
+      "business_id": 42,
+      "supply_id": "100-0018_1000_11/21/2024",
+      "delivery_delay_days": 30,
+      "quantity_decrease_pct": 0,
+      "session_key": "agent:material:subagent:cff86b96-...",
+      "agent_id": "material"
     }
     """
     import job_store as _js
 
-    data = dict(payload)
-    thread_id = data.pop("_thread_id", None)
-    session_key = data.pop("_session_key", None)
-    agent_id = data.pop("_agent_id", None)
-    business_id = data.get("business_id", 0)
+    data: Dict[str, Any] = {
+        "business_id": business_id,
+        "supply_id": supply_id,
+        "delivery_delay_days": delivery_delay_days,
+        "quantity_decrease_pct": quantity_decrease_pct,
+        "type": event_type,
+        "source": source,
+        "recipients": recipients or [],
+        "message_id": message_id,
+    }
+    if negotiation_round is not None:
+        data["negotiation_round"] = negotiation_round
+    if parent_plan_run_id is not None:
+        data["parent_plan_run_id"] = parent_plan_run_id
+
     job_id = str(uuid.uuid4())
 
     print(

@@ -71,11 +71,11 @@ exec curl -s -X POST http://switch-service:6000/publish -H 'Content-Type: applic
 
 Publish `trace.material.engineStarted` (major, +businessId).
 
-Call `material_engine` with a `payload` wrapper. **MUST include `_session_key` and `_agent_id`** so the async completion callback can resume this exact session:
+Call `material_engine` with flat top-level args (no nested `payload` wrapper). **MUST include `session_key` and `agent_id`** so the async completion callback can resume this exact session:
 ```json
-{"payload":{"business_id":1,"message_id":"123","type":"Material","source":2,"recipients":[1],"supply_id":"S_ID","delivery_delay_days":30,"quantity_decrease_pct":0,"_session_key":"agent:material:subagent:{session_uuid}","_agent_id":"material"}}
+{"business_id":1,"supply_id":"S_ID","delivery_delay_days":30,"quantity_decrease_pct":0,"event_type":"Material","source":2,"recipients":[1],"message_id":123,"session_key":"agent:material:subagent:{session_uuid}","agent_id":"material"}
 ```
-`{session_uuid}` is the Step 0a output verbatim. Omitting `_session_key` means the background job completes but Case E never fires — the UI hangs.
+`{session_uuid}` is the Step 0a output verbatim. Omitting `session_key` means the background job completes but Case E never fires — the UI hangs.
 
 **`material_engine` is async** — it returns immediately with `{"status":"pending","job_id":"<uuid>","message":"..."}`. The impact replan runs in the background (4–5 min); when it finishes, the session is resumed via Case E with the full `material_impact`. Do NOT poll yourself. After firing the tool, publish `trace.material.engineSubmitted` (waiting, +job_id) and end the turn with `Material impact replan submitted (job <uuid>). Awaiting completion.` — the next turn enters Case E.
 

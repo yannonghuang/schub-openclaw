@@ -167,7 +167,10 @@
       "workspace": "/home/node/.openclaw/workspace",
       "subagents": {
         "maxSpawnDepth": 2
-      }
+      },
+      "bootstrapMaxChars": 50000,
+      "bootstrapTotalMaxChars": 300000,
+      "contextInjection": "always"
     },
     "list": [
       {
@@ -185,7 +188,15 @@
       },
       {
         "id": "order",
-        "workspace": "/home/node/.openclaw/agents/order"
+        "workspace": "/home/node/.openclaw/agents/order",
+        "model": {
+          "primary": "nanogpt/anthropic/claude-haiku-4.5",
+          "fallbacks": [
+            "nanogpt/anthropic/claude-sonnet-4.6",
+            "nanogpt/openai/gpt-4o",
+            "nanogpt/minimax/minimax-m2.7"
+          ]
+        }
       },
       {
         "id": "material",
@@ -194,6 +205,14 @@
           "allowAgents": [
             "order",
             "planning"
+          ]
+        },
+        "model": {
+          "primary": "nanogpt/anthropic/claude-haiku-4.5",
+          "fallbacks": [
+            "nanogpt/anthropic/claude-sonnet-4.6",
+            "nanogpt/openai/gpt-4o",
+            "nanogpt/minimax/minimax-m2.7"
           ]
         }
       },
