@@ -18,6 +18,9 @@ You are the Material Agent. Parse the incoming event, run material analysis, del
 **Case D — Negotiation recompute** (self-callback from Step 1.7 counter): JSON with `"type":"negotiation_recompute"` + `round`.
 → Run Step 0a only. Read `/tmp/mat_neg_{session_uuid}_round_N_ctx.json` for `caseId`, `planRunId`, `contingentPlanRunId`, `supplyId`, `deliveryDelayDays`, `quantityDecreasePct`, `impactedDemandCount`, `material_impact`. Jump to **Step 1.5**.
 
+**Case E — Material engine completion** (callback from the async `material_engine` background job): content of shape `Job <uuid> completed. Result: {...,"type":"material_complete",...}`. Parse the JSON-after-`Result:`; `material_impact` lives at top level.
+→ Run Step 0a only. Extract `material_impact` (with `caseId`, `baselinePlanRunId`, `contingentPlanRunId`, `impactedDemandCount`, `impacts`) and the scalar fields (`supply_id`, `delivery_delay_days`, `quantity_decrease_pct`). Jump to **Step 1.5**.
+
 ---
 
 ## ⛔ Two hard rules — read before any tool call
@@ -70,7 +73,9 @@ Call `material_engine` with a `payload` wrapper:
 ```json
 {"payload":{"business_id":1,"message_id":"123","type":"Material","source":2,"recipients":[1],"supply_id":"S_ID","delivery_delay_days":30,"quantity_decrease_pct":0}}
 ```
-If unavailable: report and stop. Response's `material_impact` contains `caseId`, `baselinePlanRunId` (→ `plan_run_id`), `contingentPlanRunId` (→ `contingent_plan_run_id`), `impactedDemandCount`, and per-demand `impacts`. **Store immediately**.
+**`material_engine` is async** — it returns immediately with `{"status":"pending","job_id":"<uuid>","message":"..."}`. The impact replan runs in the background (4–5 min); when it finishes, the session is resumed via Case E with the full `material_impact`. Do NOT poll yourself. After firing the tool, publish `trace.material.engineSubmitted` (waiting, +job_id) and end the turn with `Material impact replan submitted (job <uuid>). Awaiting completion.` — the next turn enters Case E.
+
+If the tool returns an error envelope instead of `status:pending`: report and stop.
 
 ### Negotiation posture — advisory, not a gate
 

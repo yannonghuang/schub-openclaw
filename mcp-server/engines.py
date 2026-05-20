@@ -411,41 +411,15 @@ async def order_engine(payload: Dict[str, Any]):
     }
 
 
-@mcp_material_engine.tool()
-async def material_engine(payload: Dict[str, Any]):
-    """
-    Material engine tool. Submits a material impact re-plan job to the allocator,
-    polls until complete, and returns the enriched result including a diff of
-    which committed demands would degrade under the proposed supply change.
-
-    IMPORTANT:
-    - All inputs MUST be wrapped inside a top-level key named "payload".
-    - "payload" must be an object (dictionary).
-    - Example tool call:
-
-    {
-      "payload": {
-        "business_id": 42,
-        "message_id": 100,
-        "type": "Material",
-        "source": 1,
-        "recipients": [1],
-        "supply_id": "100-0018_1000_11/21/2024",
-        "delivery_delay_days": 30,
-        "quantity_decrease_pct": 0
-      }
-    }
-
-    The engine polls the allocator asynchronously and returns the full result directly
-    (no job_id exposed to the caller). The result includes a `material_impact` field
-    with `baselinePlanRunId`, `contingentPlanRunId`, and the list of impacted demands
-    showing baselineCommittedQty vs contingentCommittedQty for each.
-    """
+async def _material_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Background worker for material_engine. Submits the allocator's
+    /material-impact replan, polls until done, and returns the
+    material-engine result envelope. Polling timeout is generous (15 min)
+    because the impact replan can take 4–5 min on large cases; gone are
+    the days when an MCP-client-side timeout could cut this short — this
+    runs in a job_store background task, not the MCP request lifetime."""
     import os
     import httpx
-
-    data = dict(payload)
-    print(f"material_engine() input payload: {data}")
 
     business_id = data.get("business_id")
     message_id = data.get("message_id")
@@ -455,14 +429,12 @@ async def material_engine(payload: Dict[str, Any]):
     supply_id = data.get("supply_id", "")
     delivery_delay_days = int(data.get("delivery_delay_days", 0))
     quantity_decrease_pct = float(data.get("quantity_decrease_pct", 0.0))
-    # Optional negotiation-chain fields. When supplied, the allocator dedups on
-    # (caseId, supply_id, delay, qty, baseline, round) and marks the parent as superseded.
+    # Optional negotiation-chain fields.
     negotiation_round = data.get("negotiation_round")
     parent_plan_run_id = data.get("parent_plan_run_id")
 
     allocator_url = os.environ.get("ALLOCATOR_BACKEND_URL", "http://allocator-backend:8000")
 
-    # Submit async re-plan job and poll for result
     material_impact: Dict[str, Any] = {}
     if supply_id:
         try:
@@ -476,7 +448,6 @@ async def material_engine(payload: Dict[str, Any]):
                     submit_body["negotiationRound"] = int(negotiation_round)
                 if parent_plan_run_id is not None:
                     submit_body["parentPlanRunId"] = int(parent_plan_run_id)
-                # 1. Submit
                 submit_resp = await client.post(
                     f"{allocator_url}/material-impact",
                     json=submit_body,
@@ -491,16 +462,14 @@ async def material_engine(payload: Dict[str, Any]):
                     if not job_id:
                         material_impact = {"error": "allocator did not return a jobId"}
                     else:
-                        # 2. Poll with exponential back-off (max ~120s total)
                         delay = 1.0
                         max_delay = 8.0
-                        max_wait = 120.0
+                        max_wait = 15 * 60.0  # 15 minutes — replans can take 4–5 min
                         elapsed = 0.0
                         while elapsed < max_wait:
                             await asyncio.sleep(delay)
                             elapsed += delay
                             delay = min(delay * 2, max_delay)
-
                             poll_resp = await client.get(
                                 f"{allocator_url}/material-impact/status/{job_id}"
                             )
@@ -529,15 +498,88 @@ async def material_engine(payload: Dict[str, Any]):
         material_impact = {"error": "supply_id not provided in payload"}
 
     return {
+        # Marker the agent's Case E classifier matches on. Keep this stable.
+        "type": "material_complete",
+        "original_type": original_event_type,
         "business_id": business_id,
         "message_id": message_id,
-        "type": original_event_type,
         "source": source,
         "recipients": recipients,
         "supply_id": supply_id,
         "delivery_delay_days": delivery_delay_days,
         "quantity_decrease_pct": quantity_decrease_pct,
         "material_impact": material_impact,
+    }
+
+
+@mcp_material_engine.tool()
+async def material_engine(payload: Dict[str, Any]):
+    """
+    Material engine tool. Runs asynchronously — returns immediately with a job
+    token; the impact replan can take 4–5 min on large cases, which would
+    blow past the MCP SDK's ~60s default request timeout if run synchronously.
+
+    Background flow (mirrors order_engine):
+      1. job_store.submit_job persists the job + spawns the background task
+         that calls the allocator's /material-impact endpoint and polls
+         /material-impact/status/{jobId} until completion.
+      2. On completion, job_store._resume_session POSTs back into the
+         OpenClaw gateway with `x-openclaw-session-key`, which re-invokes
+         the material agent's session with a message of shape
+         `Job <uuid> completed. Result: {"type":"material_complete",...}`.
+      3. The agent's Case E classifier picks that up and proceeds to Step 1.5.
+
+    IMPORTANT:
+    - All inputs MUST be wrapped inside a top-level key named "payload".
+    - "payload" must be an object (dictionary).
+    - "_session_key" is injected by the gateway and required for the
+      completion callback to find this agent session.
+
+    Example tool call:
+
+    {
+      "payload": {
+        "business_id": 42,
+        "message_id": 100,
+        "type": "Material",
+        "source": 1,
+        "recipients": [1],
+        "supply_id": "100-0018_1000_11/21/2024",
+        "delivery_delay_days": 30,
+        "quantity_decrease_pct": 0
+      }
+    }
+    """
+    import job_store as _js
+
+    data = dict(payload)
+    thread_id = data.pop("_thread_id", None)
+    session_key = data.pop("_session_key", None)
+    agent_id = data.pop("_agent_id", None)
+    business_id = data.get("business_id", 0)
+    job_id = str(uuid.uuid4())
+
+    print(
+        f"material_engine() submitting async job {job_id} for session "
+        f"{session_key or thread_id!r}",
+        flush=True,
+    )
+
+    await _js.submit_job(
+        job_id=job_id,
+        thread_id=thread_id,
+        business_id=business_id,
+        engine_name="material_engine",
+        payload=data,
+        engine_fn=_material_engine_body,
+        session_key=session_key,
+        agent_id=agent_id,
+    )
+
+    return {
+        "status": "pending",
+        "job_id": job_id,
+        "message": "Material impact replan submitted. You will be notified when complete.",
     }
 
 
