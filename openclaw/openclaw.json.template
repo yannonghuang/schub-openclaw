@@ -184,6 +184,14 @@
             "scheduling",
             "wip"
           ]
+        },
+        "model": {
+          "primary": "nanogpt/anthropic/claude-haiku-4.5",
+          "fallbacks": [
+            "nanogpt/anthropic/claude-sonnet-4.6",
+            "nanogpt/openai/gpt-4o",
+            "nanogpt/minimax/minimax-m2.7"
+          ]
         }
       },
       {
@@ -218,7 +226,15 @@
       },
       {
         "id": "planning",
-        "workspace": "/home/node/.openclaw/agents/planning"
+        "workspace": "/home/node/.openclaw/agents/planning",
+        "model": {
+          "primary": "nanogpt/anthropic/claude-haiku-4.5",
+          "fallbacks": [
+            "nanogpt/anthropic/claude-sonnet-4.6",
+            "nanogpt/openai/gpt-4o",
+            "nanogpt/minimax/minimax-m2.7"
+          ]
+        }
       },
       {
         "id": "scheduling",

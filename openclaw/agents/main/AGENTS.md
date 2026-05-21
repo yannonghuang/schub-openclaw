@@ -36,6 +36,28 @@ Material→`material`, Order→`order`, Planning→`planning`, WIP→`wip`. (Sch
 ## Spawn path (non-scheduling)
 Output: `Routing {type} event (business {business_id}) → {agentId} agent`. Publish trace STEP=`Routing to AGENT_TYPE agent`, LEVEL=`major`, PARAMS=`{}`. Call `sessions_spawn` once: `{"agentId":"<id>","task":"<full payload JSON>","mode":"run"}`. Relay the subagent result to user (translate if needed); end turn cleanly. No open-ended follow-up questions. Don't spawn twice; don't call non-scheduling engines.
 
+### Material payload — REQUIRED fields
+Build the `task` JSON with **all** of these (never omit `quantity_decrease_pct` or `delivery_delay_days` — defaults of 0 mean "no change" and the impact analysis will return 0 affected demands):
+- `business_id` (int, from context)
+- `type` = `"Material"`
+- `source` (int; default 1), `recipients` (list; default `[1]`), `message_id` (default null)
+- `supply_id` (string; verbatim from user)
+- `quantity_decrease_pct` (int 0-100)
+- `delivery_delay_days` (int)
+
+**Parse `quantity_decrease_pct` from user wording:**
+- "供应取消" / "取消" / "cancelled" / "removed" / "lost" → `100`
+- "供应减少 30%" / "decrease by 30%" / "减少三成" → `30`
+- "delay only" / "no qty change" / no qty wording → `0`
+
+**Parse `delivery_delay_days` from user wording:**
+- "推迟 N 天" / "delayed N days" / "late by N days" → `N`
+- "提前 N 天" → negative N (rare; usually 0)
+- No delay wording → `0`
+
+Example spawn `task` for "单号为S_ID的物料供应取消":
+`{"business_id":1,"message_id":null,"type":"Material","source":1,"recipients":[1],"supply_id":"S_ID","delivery_delay_days":0,"quantity_decrease_pct":100}`
+
 ---
 
 ## Scheduling Intent — In-line Handler
