@@ -149,9 +149,48 @@ async def planning_engine(payload: Dict[str, Any]):
     else:
         assessment = {"error": "supply_id and case_id are required for assessment"}
 
-    rating = assessment.get("rating", "MEDIUM")
+    # When the assessment service errored (upstream LLM down, allocator HTTP
+    # 500, etc.), do NOT manufacture a rating. Returning a phony "MEDIUM" let
+    # the agent promote a contingent plan and send users an email saying the
+    # plan went active with a fabricated rating. Surface the failure honestly
+    # so the agent can halt.
+    if "error" in assessment:
+        return {
+            "status": "error",
+            "error": assessment.get("error", "assessment failed"),
+            "detail": assessment.get("detail"),
+            "business_id": business_id,
+            "message_id": message_id,
+            "source": source,
+            "recipients": recipients,
+            "case_id": case_id,
+            "plan_run_id": plan_run_id,
+            "contingent_plan_run_id": contingent_plan_run_id,
+            "supply_id": supply_id,
+            "delivery_delay_days": delivery_delay_days,
+            "quantity_decrease_pct": quantity_decrease_pct,
+        }
+
+    rating = assessment.get("rating")
     explanation = assessment.get("explanation", "")
     impacted_demands = assessment.get("impacts", [])
+
+    if not rating:
+        return {
+            "status": "error",
+            "error": "assessment response missing rating",
+            "detail": str(assessment)[:500],
+            "business_id": business_id,
+            "message_id": message_id,
+            "source": source,
+            "recipients": recipients,
+            "case_id": case_id,
+            "plan_run_id": plan_run_id,
+            "contingent_plan_run_id": contingent_plan_run_id,
+            "supply_id": supply_id,
+            "delivery_delay_days": delivery_delay_days,
+            "quantity_decrease_pct": quantity_decrease_pct,
+        }
 
     return {
         "status": "processed",
@@ -340,7 +379,24 @@ async def _order_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
     else:
         assessment = {"error": "supply_id and case_id are required for assessment"}
 
-    rating = assessment.get("rating", "MEDIUM")
+    # Same rule as planning_engine: surface failure honestly instead of
+    # fabricating a MEDIUM rating when the assessment service is unavailable.
+    if "error" in assessment or not assessment.get("rating"):
+        return {
+            "status": "error",
+            "error": assessment.get("error", "assessment failed"),
+            "detail": assessment.get("detail") or str(assessment)[:500],
+            "business_id": business_id,
+            "message_id": message_id,
+            "type": event_type,
+            "source": source,
+            "recipients": recipients,
+            "supply_id": supply_id,
+            "delivery_delay_days": delivery_delay_days,
+            "quantity_decrease_pct": quantity_decrease_pct,
+        }
+
+    rating = assessment["rating"]
     explanation = assessment.get("explanation", "")
 
     return {

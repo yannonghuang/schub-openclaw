@@ -117,6 +117,12 @@ exec curl -s -X POST http://switch-service:6000/publish \
 
 When this session is resumed with a job completion message, read the result from that message.
 
+**If the result has `status: "error"`** (assessment service unavailable, LLM down, etc.): DO NOT proceed. DO NOT fabricate a rating. DO NOT send an approval email — there is nothing to approve.
+1. Publish trace `trace.order.assessmentFailed` (major, `params={"error":"ERROR_TEXT"}`).
+2. Send a **notification** (not HITL) email to the source business in LOCALE saying the assessment service was unavailable, no rating was determined, and to retry once service is restored. Subject EN: `"Order Analysis Failed"` / ZH: `"订单评估失败"`.
+3. Dispatch the Step 3 callback curl with `{"type":"order_complete","outcome":"error","error":"ERROR_TEXT", ...original_fields}` so the parent material session unblocks and reports the failure too.
+4. Output `{"outcome":"error","error":"ERROR_TEXT","session_key":"YOUR_SESSION_KEY"}` and STOP.
+
 Publish a trace event with the rating:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
@@ -127,7 +133,8 @@ Replace RATING with the `rating` field from the result (LOW, MEDIUM, or HIGH).
 
 Inspect the `rating` field:
 - If `rating = "LOW"`: automatically approved — proceed to Step 3.
-- If `rating = "HIGH"` or `rating = "MEDIUM"` (or missing or unrecognised): publish these trace events in order, then send a confirmation request email using the `send_email` skill (include the rating and explanation from the result), then end your turn returning exactly: `{"outcome": "pending_approval", "session_key": "YOUR_SESSION_KEY"}`. Do NOT proceed to Step 3 or 4.
+- If `rating = "HIGH"` or `rating = "MEDIUM"`: publish these trace events in order, then send a confirmation request email using the `send_email` skill (include the rating and explanation from the result), then end your turn returning exactly: `{"outcome": "pending_approval", "session_key": "YOUR_SESSION_KEY"}`. Do NOT proceed to Step 3 or 4.
+- If `rating` is missing/empty/unrecognised: treat as the error path above. Do NOT default to MEDIUM.
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \

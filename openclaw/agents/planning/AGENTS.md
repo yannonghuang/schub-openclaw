@@ -87,7 +87,12 @@ Always include `case_id`, `plan_run_id`, `contingent_plan_run_id`, `supply_id`. 
 
 If `planning_engine` is unavailable, report and stop.
 
-Use the result immediately — it contains `rating`, `explanation`, and `impacted_demands` (list of demands with quantities). Store these for use in later steps.
+**If `planning_engine` returns `status: "error"`**: the assessment service is unavailable (LLM down, allocator error, etc.). DO NOT proceed. DO NOT invent a rating. DO NOT send an approval email. DO NOT promote the contingent plan. Take these steps and STOP:
+1. Publish trace `trace.planning.assessmentFailed` (major) with `params={"error":"ERROR_TEXT"}`.
+2. Send a **notification** email (not a HITL approval — there is nothing to approve) to `recipients` describing the failure. LOCALE-matched. Subject: `"供应计划评估失败"` / `"Supply plan assessment failed"`. Body must say the assessment service was unavailable, NO rating was determined, the contingent plan was NOT promoted, and that the user should retry once service is restored.
+3. Output `{"outcome":"error","error":"ERROR_TEXT"}` and STOP. Never fabricate `rating`, `explanation`, or impacted-demand counts.
+
+Use the successful result immediately — it contains `rating`, `explanation`, and `impacted_demands` (list of demands with quantities). Store these for use in later steps.
 
 ### Step 2 — Review rating
 
@@ -100,7 +105,8 @@ exec curl -s -X POST http://switch-service:6000/publish \
 Replace RATING with the actual value from the result.
 
 - If `rating = "LOW"`: auto-approved — proceed directly to Step 3.
-- If `rating = "MEDIUM"` or `rating = "HIGH"` (or missing/unrecognised): send a HITL approval request email.
+- If `rating = "MEDIUM"` or `rating = "HIGH"`: send a HITL approval request email.
+- If `rating` is missing/empty/unrecognised: treat as Step 1's error path (assessment failed — do NOT default to MEDIUM, do NOT promote).
 
 **For MEDIUM or HIGH**: use the `send_email` skill with `session_key` set to your session key. Compose the email:
 

@@ -93,6 +93,8 @@ exec curl -sS -X POST http://allocator-backend:8000/material-impact-assessment -
 ```
 Extract `rating` (`LOW`/`MEDIUM`/`HIGH`) and `explanation`. `LOW` → **Step 2**. `MEDIUM`/`HIGH` → **Step 1.6**.
 
+**If the curl fails (non-200, JSON `error` field, or `rating` missing/empty)**: the assessment service is unavailable. Publish trace `trace.material.assessmentFailed` (major, `params={"error":"ERROR_TEXT"}`). Send a notification email (LOCALE-matched, subject `"物料评估失败"` / `"Material assessment failed"`) stating the service is down, no rating was determined, and to retry once service is restored. Do NOT default to MEDIUM, do NOT spawn the order agent, do NOT proceed to Step 2. Output `{"outcome":"error","error":"ERROR_TEXT"}` and STOP.
+
 ### Step 1.6 — Negotiation round N
 
 Increment round counter:
