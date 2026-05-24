@@ -20,6 +20,27 @@ exec curl -s -X POST http://switch-service:6000/publish -H 'Content-Type: applic
 ---
 
 ## Message Classification
+
+### Step 0 — Pending negotiation check (run FIRST, before everything else below)
+
+The material subagent's Step 1.6 negotiation prompt is surfaced through this chat — there is no separate UI dialog. If a material subagent paused waiting for a planner reply, the user's next message is the reply (e.g. `保持原样`, `keep as-is`, `try 3 days and 10%`, `algorithm`, `算了`). Forward it instead of classifying it as a fresh intent.
+
+Before any spawn/in-line routing, check for an unresolved negotiation:
+```
+exec curl -s http://allocator-backend:8000/negotiation-waits/latest-unresolved
+```
+- Response `null` → no pending negotiation; continue to Message Classification below.
+- Response is a JSON object with `caseId`, `sessionKey`, `round` → the user message IS the negotiation reply. Forward it as natural-language and END:
+  ```
+  exec curl -s -X POST http://allocator-backend:8000/cases/CASE_ID/negotiation-reply \
+    -H 'Content-Type: application/json' \
+    -d '{"sessionKey":"SESSION_KEY","action":"nl","round":ROUND,"text":"USER_MESSAGE_VERBATIM"}'
+  ```
+  Then end turn cleanly with one short LOCALE-matched sentence: `已转交物料子Agent继续处理。` / `Forwarded to material agent.` Do NOT spawn anything; do NOT re-classify the message. The material agent's Case C handler will classify the reply (keep/counter/abandon) and resume.
+
+  Skip this only when the user message is obviously a brand-new event (contains `type=Material/Order/Planning/WIP/Scheduling` JSON, or matches a scheduling trigger keyword). When in doubt, forward.
+
+### Step 1 — Classify (only if Step 0 said `null`)
 - `type=Scheduling` OR free-text with scheduling triggers (below) → in-line handler.
 - `type=Material/Order/Planning/WIP` (JSON or free-text intent) → spawn subagent.
 - Greeting/general → brief intro, ask what's needed.
