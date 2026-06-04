@@ -563,6 +563,68 @@ make prod-pull     # pulls new images and restarts
 
 ---
 
+## Disk & Image Maintenance
+
+Prod pulls pre-built images, so it never accumulates *build* cache — but **every `make prod-pull` downloads new image tags and leaves the previous versions behind**. Over many releases those superseded images (plus unbounded container logs) fill the root disk. A 100%-full `/` makes services fail to start and can make the host look broken, so stay ahead of it.
+
+### Prune old images after each deploy (built into `make prod-pull`)
+
+`make prod-pull` (`pull` → `up -d` → `restart nginx` → `docker image prune -af`) now **reclaims the image versions it just replaced automatically**, so this stays bounded with no extra step. The prune is **safe on prod**: every running service keeps its current image referenced, so only the now-unused old versions are deleted, and named volumes (your DB / Redis / openclaw data) are never touched.
+
+If you deploy by some other means (not the Make target), run the same reclaim yourself afterward:
+
+```bash
+docker image prune -af        # reclaim the images the pull just superseded
+```
+
+⚠️ **Never** run `docker system prune --volumes` or `docker compose down -v` on prod — both delete the data volumes (`schub_db-data`, `schub_openclaw-workspace`, …).
+
+### Cap the silent growers (one-time setup)
+
+Two things grow regardless of deploys on a long-running host:
+
+**Container logs** — Docker's default `json-file` driver never rotates. Bound them globally in `/etc/docker/daemon.json`:
+
+```json
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "5" }
+}
+```
+```bash
+sudo systemctl restart docker
+```
+
+**systemd journal** — cap it in `/etc/systemd/journald.conf`:
+
+```ini
+SystemMaxUse=300M
+```
+```bash
+sudo systemctl restart systemd-journald
+```
+
+### Weekly safety-net cron
+
+Belt-and-suspenders in case a deploy ever skips the prune (both commands are volume-safe):
+
+```bash
+# /etc/cron.d/docker-prune
+0 4 * * 0  root  docker image prune -af && docker builder prune -af
+```
+
+### Data volumes & monitoring
+
+- **Volumes grow from application data, not deploys** — manage at the source (Postgres retention of old `plan_runs` / audit spans), and watch them with `docker system df -v`.
+- **Alert at ~80% disk usage** (cron or your monitoring) so you act before hitting 100%. Check anytime:
+  ```bash
+  df -h /
+  docker system df
+  ```
+- Size the disk with headroom — see [Hardware](#hardware-single-host-install) (200 GB NVMe recommended; image layers + run history grow over time).
+
+---
+
 ## Troubleshooting
 
 ### `docker compose` not found / `unknown flag: --env-file`
@@ -648,6 +710,21 @@ Both stacks pin the volume to a stable name (`name: schub_db-data` in compose) s
 ### `make down` / `make ps` / `make logs` fails with "no such file: .env.dev" on the VM
 These targets use the dev env file. On the VM (prod), use the prod variants:
 - `make ps-prod`, `make logs-prod`, `make down-prod`
+
+### Disk full — services fail to start / containers restart-loop / host unresponsive
+A 100%-full root filesystem breaks almost everything (services can't write, no temp space, Postgres refuses writes). On a VM it can even look like a boot failure. Confirm and find the culprit:
+```bash
+df -h /
+sudo du -xh --max-depth=1 /var 2>/dev/null | sort -h | tail   # usually /var/lib/docker dominates
+docker system df
+```
+The usual cause is accumulated old image versions from repeated `make prod-pull` (see [Disk & Image Maintenance](#disk--image-maintenance)). Reclaim space **without losing data**:
+```bash
+sudo journalctl --vacuum-size=100M     # trim systemd journal
+docker image prune -af                 # remove unused images (keeps running stack + volumes)
+docker builder prune -af               # build cache (≈0 on prod, harmless)
+```
+Do **not** use `--volumes` or `down -v` — that deletes the DB/Redis/openclaw volumes. Then put the preventive measures from [Disk & Image Maintenance](#disk--image-maintenance) in place so it doesn't recur.
 
 ---
 

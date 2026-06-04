@@ -19,10 +19,11 @@ dev-build:                    ## Rebuild and start dev stack
 prod:                         ## Start prod stack from pre-built images (detached)
 	docker compose $(PROD_FILES) up -d
 
-prod-pull:                    ## Pull latest images then start prod stack
+prod-pull:                    ## Pull latest images, start prod stack, prune superseded images
 	docker compose $(PROD_FILES) pull
 	docker compose $(PROD_FILES) up -d
 	docker compose $(PROD_FILES) restart nginx
+	docker image prune -af   # reclaim images this pull superseded (volume-safe; see DEPLOY.md)
 
 # ── Build & push ──────────────────────────────────────────────────────────────
 
