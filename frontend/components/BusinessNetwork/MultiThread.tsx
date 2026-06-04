@@ -1,9 +1,12 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import toast from "react-hot-toast";
 import Agent from "./Agent";
 import { useAgentPanel } from "../../context/AgentPanelContext";
 import { useThreadHistory } from "../../hooks/useThreadHistory";
+import { useSessionsStatus } from "../../hooks/useSessionsStatus";
+import SessionsPanel from "./SessionsPanel";
 import { useAuth } from "../../context/AuthContext";
 import { useTranslation } from "next-i18next/pages";
 import { SuggestionItem, type Suggestion } from "./SuggestionItem";
@@ -24,6 +27,13 @@ export default function MultiThread() {
   const [showNewChat, setShowNewChat] = useState(false);
   const [newChatInput, setNewChatInput] = useState("");
   const [showHistory, setShowHistory] = useState(false);
+  const [showSessions, setShowSessions] = useState(false);
+
+  // Poll the OpenClaw session inventory while the maintenance row is visible, so
+  // the Sessions panel is live and the toggle can signal "clear" (no leftovers).
+  const { data: sessionsData, loading: sessionsLoading } = useSessionsStatus(showNewChat);
+  const idleTotal = sessionsData?.agents.reduce((n, a) => n + (a.counts.idle || 0), 0) ?? 0;
+  const sessionsClear = sessionsData != null && idleTotal === 0;
 
   // /material typeahead for the New Chat input
   const [newChatSuggestions, setNewChatSuggestions] = useState<Suggestion[]>([]);
@@ -109,6 +119,7 @@ export default function MultiThread() {
     setNewChatInput("");
     setShowNewChat(false);
     setShowHistory(false);
+    setShowSessions(false);
   };
 
   const handleReopenThread = (t: typeof history[0]) => {
@@ -124,12 +135,81 @@ export default function MultiThread() {
     reloadHistory();
     setShowHistory(true);
     setShowNewChat(false);
+    setShowSessions(false);
+  };
+
+  const [cleaning, setCleaning] = useState(false);
+
+  const runCleanup = async (force: boolean) => {
+    const res = await fetch("/agui/cleanup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ business_id: businessId, force }),
+    });
+    if (res.status === 409) {
+      // Guard tripped: an open negotiation (or unverifiable allocator). Surface
+      // the server's reason and let the user force past it.
+      const body = await res.json().catch(() => null);
+      const msg = body?.detail?.message ?? t("panel.cleanupBlocked", { defaultValue: "Cleanup blocked: an agent negotiation is still open." });
+      if (!force && window.confirm(`${msg}\n\n${t("panel.cleanupForce", { defaultValue: "Force cleanup anyway?" })}`)) {
+        return runCleanup(true);
+      }
+      toast.error(msg);
+      return;
+    }
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json();
+    const abandoned = (data.abandoned_negotiations ?? []).length;
+    let msg = t("panel.cleanupDone", { count: data.deleted_sessions ?? 0, defaultValue: `Removed ${data.deleted_sessions ?? 0} sessions` });
+    if (abandoned > 0) msg += " " + t("panel.cleanupAbandoned", { count: abandoned, defaultValue: `(abandoned ${abandoned} open negotiations)` });
+    toast.success(msg);
+  };
+
+  const handleCleanup = async () => {
+    if (!window.confirm(t("panel.cleanupConfirm", { defaultValue: "Delete all OpenClaw agent sessions? This cannot be undone." }))) return;
+    setCleaning(true);
+    try {
+      await runCleanup(false);
+    } catch (err) {
+      toast.error(t("panel.cleanupError", { defaultValue: "Cleanup failed" }));
+    } finally {
+      setCleaning(false);
+    }
+  };
+
+  const handleClearHistory = async () => {
+    if (businessId == null) return;
+    if (!window.confirm(t("panel.clearHistoryConfirm", { defaultValue: "Delete all saved conversations for this business?" }))) return;
+    setCleaning(true);
+    try {
+      const res = await fetch(`/thread/business/${businessId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(String(res.status));
+      reloadHistory();
+      toast.success(t("panel.clearHistoryDone", { defaultValue: "History cleared" }));
+    } catch (err) {
+      toast.error(t("panel.clearHistoryError", { defaultValue: "Could not clear history" }));
+    } finally {
+      setCleaning(false);
+    }
+  };
+
+  const handleDeleteThread = async (thread: typeof history[0]) => {
+    if (!window.confirm(t("panel.deleteThreadConfirm", { defaultValue: "Delete this conversation?" }))) return;
+    try {
+      const res = await fetch(`/thread/${thread.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(String(res.status));
+      reloadHistory();
+      toast.success(t("panel.deleteThreadDone", { defaultValue: "Conversation deleted" }));
+    } catch (err) {
+      toast.error(t("panel.deleteThreadError", { defaultValue: "Could not delete conversation" }));
+    }
   };
 
   const close = () => {
     setShowWindow(false);
     setShowNewChat(false);
     setShowHistory(false);
+    setShowSessions(false);
   };
 
   return (
@@ -153,7 +233,7 @@ export default function MultiThread() {
           <div className="flex items-center gap-2">
             <span className="font-semibold text-sm text-gray-700">{t("panel.title")}</span>
             <button
-              onClick={() => { setShowNewChat(s => !s); setShowHistory(false); }}
+              onClick={() => { setShowNewChat(s => { if (s) setShowSessions(false); return !s; }); setShowHistory(false); }}
               className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
             >
               {t("panel.newChat")}
@@ -182,6 +262,34 @@ export default function MultiThread() {
                   {q}
                 </button>
               ))}
+            </div>
+            <div className="flex gap-2 items-center border-t pt-2">
+              <span className="text-xs text-gray-400">{t("panel.maintenance", { defaultValue: "Maintenance" })}</span>
+              <button
+                onClick={handleCleanup}
+                disabled={cleaning}
+                className="text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 disabled:opacity-40"
+                title={t("panel.cleanupConfirm", { defaultValue: "Delete all OpenClaw agent sessions? This cannot be undone." })}
+              >
+                {t("panel.cleanup", { defaultValue: "Cleanup" })}
+              </button>
+              <button
+                onClick={handleClearHistory}
+                disabled={cleaning || businessId == null}
+                className="text-xs px-2 py-1 bg-gray-200 text-gray-600 rounded hover:bg-gray-300 disabled:opacity-40"
+                title={t("panel.clearHistoryConfirm", { defaultValue: "Delete all saved conversations for this business?" })}
+              >
+                {t("panel.clearHistory", { defaultValue: "Clear history" })}
+              </button>
+              <button
+                onClick={() => setShowSessions(s => !s)}
+                className={`text-xs px-2 py-1 rounded ${showSessions ? "ring-1 ring-blue-300 " : ""}${sessionsClear ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-gray-200 text-gray-600 hover:bg-gray-300"}`}
+                title={sessionsClear
+                  ? t("panel.sessionsClear", { defaultValue: "No leftover sessions — all clear" })
+                  : t("panel.sessionsIdle", { count: idleTotal, defaultValue: `${idleTotal} leftover session(s)` })}
+              >
+                {t("panel.sessions", { defaultValue: "Sessions" })}
+              </button>
             </div>
             <div className="relative">
               {showNewChatSuggestions && newChatSuggestions.length > 0 && (
@@ -221,6 +329,9 @@ export default function MultiThread() {
           </div>
         )}
 
+        {/* Sessions Panel */}
+        {showSessions && <SessionsPanel data={sessionsData} loading={sessionsLoading} />}
+
         {/* History Panel */}
         {showHistory && (
           <div className="border-b px-4 py-3 bg-gray-50 flex-shrink-0 overflow-y-auto max-h-56">
@@ -240,12 +351,21 @@ export default function MultiThread() {
                   </div>
                   <span className="text-[10px] text-gray-400 ml-1">{thread.message_count} msg · {new Date(thread.created_at).toLocaleDateString()}</span>
                 </div>
-                <button
-                  onClick={() => handleReopenThread(thread)}
-                  className="text-xs px-2 py-0.5 bg-white border rounded hover:bg-gray-100 flex-shrink-0"
-                >
-                  {t("buttons.open", { ns: "common" })}
-                </button>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    onClick={() => handleReopenThread(thread)}
+                    className="text-xs px-2 py-0.5 bg-white border rounded hover:bg-gray-100"
+                  >
+                    {t("buttons.open", { ns: "common" })}
+                  </button>
+                  <button
+                    onClick={() => handleDeleteThread(thread)}
+                    className="text-xs px-1.5 py-0.5 text-gray-400 hover:text-red-600"
+                    title={t("panel.deleteThread", { defaultValue: "Delete conversation" })}
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
             ))}
           </div>

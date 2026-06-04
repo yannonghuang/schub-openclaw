@@ -238,11 +238,13 @@
       },
       {
         "id": "scheduling",
-        "workspace": "/home/node/.openclaw/agents/scheduling"
+        "workspace": "/home/node/.openclaw/agents/scheduling",
+        "heartbeat": { "every": "0m" }
       },
       {
         "id": "wip",
-        "workspace": "/home/node/.openclaw/agents/wip"
+        "workspace": "/home/node/.openclaw/agents/wip",
+        "heartbeat": { "every": "0m" }
       }
     ]
   },

@@ -34,6 +34,10 @@ services:
       target: dev
     volumes:
       - ./services/switch:/app
+      # Live OpenClaw workspace — lets the /cleanup endpoint wipe agent sessions
+      # (sessions resolve at /openclaw/agents/{agent}/sessions, matching the
+      # gateway's ./openclaw:/home/node/.openclaw mount).
+      - ./openclaw:/openclaw
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "6000", "--reload"]
 
   audit-service:

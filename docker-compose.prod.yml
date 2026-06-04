@@ -43,6 +43,10 @@ services:
 
   switch-service:
     image: ${REGISTRY}schub-switch:${TAG}
+    volumes:
+      # Shares the gateway's workspace volume so the /cleanup endpoint can wipe
+      # agent sessions (agents resolve at /openclaw/agents).
+      - openclaw-workspace:/openclaw
 
   audit-service:
     image: ${REGISTRY}schub-audit:${TAG}

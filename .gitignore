@@ -29,6 +29,8 @@ openclaw/credentials/
 openclaw/devices/
 openclaw/identity/
 openclaw/logs/
+openclaw/state/
+openclaw/workspace-attestations/
 openclaw/subagents/
 openclaw/telegram/
 openclaw/update-check.json

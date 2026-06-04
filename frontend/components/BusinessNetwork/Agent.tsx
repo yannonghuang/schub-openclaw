@@ -138,6 +138,80 @@ const TERMINAL_STEPS = new Set<string>([
   "trace.scheduling.rejected",
 ]);
 
+// --- Material-agent negotiation prompt --------------------------------------
+// The actionable negotiation card is driven from two sources: the material
+// agent's "negotiationWaiting" trace (fast path, best-effort — the LLM can
+// paraphrase the step name) and, authoritatively, by polling the allocator's
+// open negotiation-wait (see Agent's negotiation-poll effect). Both feed
+// buildNeg(), so the prompt surfaces even if the trace is renamed, dropped, or
+// arrives after RunFinished.
+export type ActiveNegotiation = {
+  caseId: number;
+  sessionKey: string;
+  round: number;
+  supplyId: string;
+  rating: string;
+  explanation: string;
+  currentDelay: number;
+  currentQtyPct: number;
+  contingentPlanRunId: number;
+  baselinePlanRunId?: number;
+  impactedDemandCount: number;
+};
+
+// Build an ActiveNegotiation from either a trace `value` or the allocator's
+// negotiation-wait view. They differ only in the delay field name
+// (`currentDelay` vs `currentDelayDays`) — accept both.
+function buildNeg(v: Record<string, unknown>): ActiveNegotiation {
+  return {
+    caseId: Number(v.caseId),
+    sessionKey: String(v.sessionKey ?? ""),
+    round: Number(v.round),
+    supplyId: String(v.supplyId ?? ""),
+    rating: String(v.rating ?? ""),
+    explanation: String(v.explanation ?? ""),
+    currentDelay: Number(v.currentDelay ?? v.currentDelayDays ?? 0),
+    currentQtyPct: Number(v.currentQtyPct ?? 100),
+    contingentPlanRunId: Number(v.contingentPlanRunId),
+    baselinePlanRunId: v.baselinePlanRunId != null ? Number(v.baselinePlanRunId) : undefined,
+    impactedDemandCount: Number(v.impactedDemandCount ?? 0),
+  };
+}
+
+// Match a (possibly paraphrased) trace step by suffix, case-insensitively.
+const stepEndsWith = (step: string, suffix: string): boolean =>
+  (step ?? "").toLowerCase().endsWith(suffix.toLowerCase());
+
+// The localized CLI-style prompt shown when a negotiation opens.
+function negotiationCardContent(neg: ActiveNegotiation, locale?: string): string {
+  const isZh = locale === "zh" || (locale?.startsWith("zh") ?? false);
+  const plural = (n: number, en: string) => (n === 1 ? en : `${en}s`);
+  const paramsEn =
+    neg.currentDelay > 0 && neg.currentQtyPct > 0
+      ? `delaying by ${neg.currentDelay} ${plural(neg.currentDelay, "day")} and cutting ${neg.currentQtyPct}%`
+      : neg.currentDelay > 0
+        ? `delaying by ${neg.currentDelay} ${plural(neg.currentDelay, "day")}`
+        : `cutting ${neg.currentQtyPct}%`;
+  const paramsZh =
+    neg.currentDelay > 0 && neg.currentQtyPct > 0
+      ? `延迟 ${neg.currentDelay} 天、削减 ${neg.currentQtyPct}%`
+      : neg.currentDelay > 0
+        ? `延迟 ${neg.currentDelay} 天`
+        : `削减 ${neg.currentQtyPct}%`;
+  const severityEn = neg.rating === "HIGH" ? "would seriously disrupt" : "would affect";
+  const askEn = "Propose a new delay / qty, keep the current state, or abandon.";
+  const askZh = "请提议新的 delay / qty、保持原样，或选择放弃。";
+  const roundEn = neg.round > 1 ? `round ${neg.round}` : "first look";
+  const roundZh = neg.round > 1 ? `第 ${neg.round} 轮` : "首轮评估";
+  return isZh
+    ? `这次调整将影响供应 ${neg.supplyId} 上的 ${neg.impactedDemandCount} 条需求 — ${paramsZh}。\n` +
+      (neg.explanation ? `\n“${neg.explanation}”\n` : "") +
+      `\n${askZh}\n回复示例：试试 2 天 5% / 就这样 / 算了。\n也可用指令：/counter delay=<d> qty=<p> · /keep · /abandon\n（${roundZh}，评级 ${neg.rating}）`
+    : `This change ${severityEn} ${neg.impactedDemandCount} demand ${plural(neg.impactedDemandCount, "line")} on supply ${neg.supplyId} — ${paramsEn}.\n` +
+      (neg.explanation ? `\n“${neg.explanation}”\n` : "") +
+      `\n${askEn}\nTry: "try 3 days and 10%" / "keep as-is" / "drop it".\nOr use: /counter delay=<d> qty=<p> · /keep · /abandon\n(${roundEn}, rating ${neg.rating})`;
+}
+
 // Strip HTML comments (e.g. <!-- <pending_option_b> ... --> agent anchors)
 // before rendering. The anchor stays in the session JSONL so the agent's
 // resume-on-history scan can still find it; only the visible chat hides it.
@@ -357,22 +431,12 @@ export default function Agent({
   /* ------------------------------------------------------------------ */
   /* Material-agent negotiation state (CLI-like chat handoff)           */
   /* ------------------------------------------------------------------ */
-  type ActiveNegotiation = {
-    caseId: number;
-    sessionKey: string;
-    round: number;
-    supplyId: string;
-    rating: string;
-    explanation: string;
-    currentDelay: number;
-    currentQtyPct: number;
-    contingentPlanRunId: number;
-    baselinePlanRunId?: number;
-    impactedDemandCount: number;
-  };
   const [activeNegotiation, setActiveNegotiation] = useState<ActiveNegotiation | null>(null);
   const activeNegotiationRef = useRef<ActiveNegotiation | null>(null);
   activeNegotiationRef.current = activeNegotiation;
+  // Assigned just after useAGUIStream (needs addMessage). The trace handler
+  // closure opens the negotiation card through this ref.
+  const openNegotiationRef = useRef<(neg: ActiveNegotiation) => void>(() => {});
   // Auto-open timeline for reopened threads (no initialMessage = history view)
   const [showTimeline, setShowTimeline] = useState(!initialMessage?.trim());
   const [msgHeight, setMsgHeight] = useState(300);
@@ -402,63 +466,22 @@ export default function Agent({
       // (async-job polling, counter-callback, planner negotiation latency).
       workflowTimerRef.current = setTimeout(() => setWorkflowActive(false), 600_000);
 
-      // Material-agent negotiation: render a CLI-style card + enable slash
-      // commands in the chat input.
-      const v = event.value as unknown as Record<string, unknown>;
+      // Material-agent negotiation (fast path). Match by suffix — the agent is
+      // LLM-driven and sometimes paraphrases the step name (e.g.
+      // "Step1_5_negotiationWaiting" vs "trace.material.negotiationWaiting").
+      // The card is also driven authoritatively by polling the allocator (see
+      // the negotiation-poll effect below), so a renamed/missed/late trace
+      // still surfaces the prompt.
+      const rawStep = String(event.value.step ?? "");
       const step = canonStep(event.value.step);
-      if (step === "trace.material.negotiationWaiting") {
-        const neg: ActiveNegotiation = {
-          caseId: Number(v.caseId),
-          sessionKey: String(v.sessionKey),
-          round: Number(v.round),
-          supplyId: String(v.supplyId),
-          rating: String(v.rating),
-          explanation: String(v.explanation ?? ""),
-          currentDelay: Number(v.currentDelay),
-          currentQtyPct: Number(v.currentQtyPct),
-          contingentPlanRunId: Number(v.contingentPlanRunId),
-          baselinePlanRunId: v.baselinePlanRunId != null ? Number(v.baselinePlanRunId) : undefined,
-          impactedDemandCount: Number(v.impactedDemandCount ?? 0),
-        };
-        setActiveNegotiation(neg);
-        const isZh = locale === "zh" || locale?.startsWith("zh");
-        const plural = (n: number, en: string) => (n === 1 ? en : `${en}s`);
-        const paramsEn =
-          neg.currentDelay > 0 && neg.currentQtyPct > 0
-            ? `delaying by ${neg.currentDelay} ${plural(neg.currentDelay, "day")} and cutting ${neg.currentQtyPct}%`
-            : neg.currentDelay > 0
-              ? `delaying by ${neg.currentDelay} ${plural(neg.currentDelay, "day")}`
-              : `cutting ${neg.currentQtyPct}%`;
-        const paramsZh =
-          neg.currentDelay > 0 && neg.currentQtyPct > 0
-            ? `延迟 ${neg.currentDelay} 天、削减 ${neg.currentQtyPct}%`
-            : neg.currentDelay > 0
-              ? `延迟 ${neg.currentDelay} 天`
-              : `削减 ${neg.currentQtyPct}%`;
-        const severityEn = neg.rating === "HIGH" ? "would seriously disrupt" : "would affect";
-        const askEn = "Propose a new delay / qty, keep the current state, or abandon.";
-        const askZh = "请提议新的 delay / qty、保持原样，或选择放弃。";
-        const roundEn = neg.round > 1 ? `round ${neg.round}` : "first look";
-        const roundZh = neg.round > 1 ? `第 ${neg.round} 轮` : "首轮评估";
-        const content = isZh
-          ? `这次调整将影响供应 ${neg.supplyId} 上的 ${neg.impactedDemandCount} 条需求 — ${paramsZh}。\n` +
-            (neg.explanation ? `\n“${neg.explanation}”\n` : "") +
-            `\n${askZh}\n回复示例：试试 2 天 5% / 就这样 / 算了。\n也可用指令：/counter delay=<d> qty=<p> · /keep · /abandon\n（${roundZh}，评级 ${neg.rating}）`
-          : `This change ${severityEn} ${neg.impactedDemandCount} demand ${plural(neg.impactedDemandCount, "line")} on supply ${neg.supplyId} — ${paramsEn}.\n` +
-            (neg.explanation ? `\n“${neg.explanation}”\n` : "") +
-            `\n${askEn}\nTry: "try 3 days and 10%" / "keep as-is" / "drop it".\nOr use: /counter delay=<d> qty=<p> · /keep · /abandon\n(${roundEn}, rating ${neg.rating})`;
-        addMessage({
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content,
-          created_at: new Date().toISOString(),
-        });
+      if (stepEndsWith(rawStep, "negotiationWaiting")) {
+        openNegotiationRef.current(buildNeg(event.value as unknown as Record<string, unknown>));
       } else if (
-        step === "trace.material.negotiationKept" ||
-        step === "trace.material.negotiationAbandoned" ||
-        step === "trace.material.negotiationExhausted" ||
-        step === "trace.material.negotiationLateReplyIgnored" ||
-        step === "trace.material.baselineDrifted"
+        stepEndsWith(rawStep, "negotiationKept") ||
+        stepEndsWith(rawStep, "negotiationAbandoned") ||
+        stepEndsWith(rawStep, "negotiationExhausted") ||
+        stepEndsWith(rawStep, "negotiationLateReplyIgnored") ||
+        stepEndsWith(rawStep, "baselineDrifted")
       ) {
         setActiveNegotiation(null);
       }
@@ -492,6 +515,57 @@ export default function Agent({
       await submit(replyText);
     }
   );
+
+  /* ------------------------------------------------------------------ */
+  /* Negotiation card — open it from the trace fast-path or the poll.   */
+  /* Idempotent: a poll and a trace can both report the same wait, so   */
+  /* skip if a card is already open (don't stack).                      */
+  /* ------------------------------------------------------------------ */
+  const openNegotiation = useCallback((neg: ActiveNegotiation) => {
+    if (activeNegotiationRef.current) return;
+    if (!Number.isFinite(neg.caseId) || !neg.sessionKey) return;
+    setActiveNegotiation(neg);
+    addMessage({
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: negotiationCardContent(neg, locale),
+      created_at: new Date().toISOString(),
+    });
+  }, [addMessage, locale]);
+  openNegotiationRef.current = openNegotiation;
+
+  /* ------------------------------------------------------------------ */
+  /* Authoritative negotiation prompt.                                  */
+  /* The actionable card must appear whenever the allocator has an open  */
+  /* negotiation-wait — regardless of whether/how the material agent     */
+  /* narrated the trace, or the RunFinished-before-trace race. Poll the  */
+  /* allocator's open wait while this thread has shown material activity  */
+  /* and no card is currently displayed.                                 */
+  /* ------------------------------------------------------------------ */
+  const sawMaterialActivity = useMemo(
+    () => traceSteps.some((s) => /material|engine|negotiat/i.test(s.label || "")),
+    [traceSteps],
+  );
+  useEffect(() => {
+    if (!resolvedThreadId || !sawMaterialActivity) return;
+    let stop = false;
+    const tick = async () => {
+      if (stop || activeNegotiationRef.current) return;
+      try {
+        const res = await fetch("/api/allocator/negotiation-active");
+        if (!res.ok) return;
+        const wait = await res.json();
+        if (wait && typeof wait === "object") {
+          openNegotiation(buildNeg(wait as Record<string, unknown>));
+        }
+      } catch {
+        /* allocator unreachable — ignore, retry next tick */
+      }
+    };
+    const id = setInterval(tick, 4000);
+    tick();
+    return () => { stop = true; clearInterval(id); };
+  }, [resolvedThreadId, sawMaterialActivity, openNegotiation]);
 
   /* ------------------------------------------------------------------ */
   /* submit — adds user message locally then POSTs to /agui/chat        */

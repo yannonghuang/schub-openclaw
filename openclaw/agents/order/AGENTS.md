@@ -53,12 +53,12 @@ Replace BUSINESS_ID with the actual business_id from the system context. Store t
 
 Run this exact command (outputs only the UUID, nothing else):
 ```
-exec sh -c 'ls -t /home/node/.openclaw/agents/order/sessions/*.jsonl 2>/dev/null | head -1 | xargs basename 2>/dev/null | sed "s/\.jsonl//"'
+exec sh /home/node/.openclaw/agents/order/bin/session_key.sh
 ```
 
-The output IS your session UUID. Your session key is: `agent:order:subagent:{that UUID}`.
+The output IS your session UUID — the **routing-key** UUID, reverse-looked-up from `sessions.json`. (Do NOT use the raw `ls -t … basename` session-file id: that is the *sessionId*, a different UUID, and routing on it misdelivers your async-job / email callbacks to another session and hangs the workflow.) Your session key is: `agent:order:subagent:{that UUID}`.
 
-Do NOT modify the UUID. Do NOT substitute a different value. Use the output verbatim.
+Do NOT modify the UUID. Do NOT substitute a different value. Use the output verbatim. Also include it as `\"sessionKey\":\"agent:order:subagent:<that UUID>\"` in your terminal `trace.order.complete` / `trace.order.rejected` traces — the gateway uses it to retire this finished session.
 
 ### Step 1 — Order Analysis (fire and forget)
 
@@ -169,7 +169,7 @@ Read the context file and publish a rejection trace:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.order.rejected\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.order.rejected\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID, \"sessionKey\": \"agent:order:subagent:SESSION_UUID\"}}", "recipients": ["-2"]}'
 ```
 Send a rejection notification to the source business. Use the subject and body for the correct locale:
 - `LOCALE=en`: subject `"Order Analysis Result"`, body `"Order analysis complete. Outcome: rejected by human approver. Impact rating: RATING. EXPLANATION. Materials: MATERIALS."`
@@ -181,7 +181,20 @@ exec curl -s -X POST http://auth-service:4000/send-email \
   -d '{"business_id": BUSINESS_ID, "recipients": [SOURCE_BUSINESS_ID], "subject": "SUBJECT", "body": "BODY"}'
 ```
 Replace SUBJECT and BODY with the locale-appropriate values above (with MATERIALS substituted).
-End turn returning: `{"outcome": "rejected"}`. Do NOT proceed to Step 4.
+
+**Then call back the material parent** so it unblocks (material will NOT spawn planning on a rejected outcome — it just finishes). This is mandatory and symmetric with the approval path: without it the material session waits forever on the approval callback. If `_material_session_key` is present, dispatch the fire-and-forget callback:
+```
+exec sh -c 'nohup curl -s -X POST http://openclaw:18789/v1/chat/completions \
+  -H "Authorization: Bearer ${OPENCLAW_TOKEN}" \
+  -H "x-openclaw-session-key: MATERIAL_SESSION_KEY" \
+  -H "Content-Type: application/json" \
+  -d '"'"'{"model":"openclaw:material","messages":[{"role":"user","content":"{\"type\":\"order_complete\",\"outcome\":\"rejected\",\"business_id\":BUSINESS_ID,\"message_id\":\"MESSAGE_ID\",\"source\":SOURCE_ID,\"recipients\":RECIPIENTS_JSON,\"materials\":MATERIALS_JSON,\"supply_id\":\"SUPPLY_ID\",\"quantity_decrease_pct\":QTY_PCT,\"delivery_delay_days\":DELAY_DAYS,\"rating\":\"RATING\",\"explanation\":\"EXPLANATION\",\"case_id\":CASE_ID,\"plan_run_id\":PLAN_RUN_ID,\"contingent_plan_run_id\":CONTINGENT_PLAN_RUN_ID}"}],"stream":false}'"'"' \
+  >/tmp/order_callback_BUSINESS_ID_MESSAGE_ID.log 2>&1 </dev/null & \
+  disown; echo callback_dispatched'
+```
+Substitute placeholders from the persisted context file (MATERIAL_SESSION_KEY from `_material_session_key`). Expect `callback_dispatched`.
+
+Then publish `trace.order.complete` (major, +sessionKey) and end turn returning: `{"outcome": "rejected"}`. Do NOT proceed to Step 4's approval JSON.
 
 **If NEEDS_MORE_TIME:**
 Recover the context file:
@@ -258,7 +271,7 @@ Publish a final trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.order.complete\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.order.complete\", \"agent\": \"order\", \"level\": \"major\", \"businessId\": BUSINESS_ID, \"sessionKey\": \"agent:order:subagent:SESSION_UUID\"}}", "recipients": ["-2"]}'
 ```
 
 Return this exact JSON as your final response (replacing placeholders with actual values):
@@ -278,4 +291,4 @@ Return this exact JSON as your final response (replacing placeholders with actua
 - Do not include raw JSON unless it is part of a tool call.
 - Do not fabricate engine results.
 - Idempotency: if Step 3 was already completed in a prior turn of this session, skip it entirely.
-- Session UUID: use the output of the `exec sh -c 'ls -t ...'` command verbatim. Do NOT invent or substitute a UUID.
+- Session UUID: use the output of `bin/session_key.sh` (the routing-key UUID) verbatim. Do NOT invent, substitute, or use the raw session-file basename.

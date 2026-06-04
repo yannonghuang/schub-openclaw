@@ -34,10 +34,10 @@ Do not invent values. Omit fields that cannot be inferred.
 
 Run this exact command to get your session UUID (outputs only the UUID, nothing else):
 ```
-exec sh -c 'ls -t /home/node/.openclaw/agents/planning/sessions/*.jsonl 2>/dev/null | head -1 | xargs basename 2>/dev/null | sed "s/\.jsonl//"'
+exec sh /home/node/.openclaw/agents/planning/bin/session_key.sh
 ```
 
-The output IS your session UUID. Your session key is: `agent:planning:subagent:{that UUID}`.
+The output IS your session UUID — the **routing-key** UUID, reverse-looked-up from `sessions.json`. (Do NOT use the raw `ls -t … basename` session-file id: that is the *sessionId*, a different UUID, and routing on it misdelivers your async-job / email callbacks to another session and hangs the workflow.) Your session key is: `agent:planning:subagent:{that UUID}`. Also include it as `\"sessionKey\":\"agent:planning:subagent:<that UUID>\"` in your terminal `trace.planning.complete` / `trace.planning.rejected` traces — the gateway uses it to retire this finished session.
 
 Look up the business locale:
 ```
@@ -157,7 +157,7 @@ Publish a rejection trace:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.rejected\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.rejected\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID, \"sessionKey\": \"agent:planning:subagent:SESSION_UUID\"}}", "recipients": ["-2"]}'
 ```
 Send a rejection notification to the source business:
 - `LOCALE=en`: subject `"Supply Plan Promotion Result"`, body `"Supply plan promotion has been cancelled. The contingent plan will not be promoted. Impact rating: RATING. EXPLANATION."`
@@ -221,7 +221,7 @@ Publish a final trace event:
 ```
 exec curl -s -X POST http://switch-service:6000/publish \
   -H 'Content-Type: application/json' \
-  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.complete\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID}}", "recipients": ["-2"]}'
+  -d '{"sender": "-1", "content": "{\"type\": \"CustomEvent\", \"name\": \"schub/trace\", \"value\": {\"step\": \"trace.planning.complete\", \"agent\": \"planning\", \"level\": \"major\", \"businessId\": BUSINESS_ID, \"sessionKey\": \"agent:planning:subagent:SESSION_UUID\"}}", "recipients": ["-2"]}'
 ```
 
 Clean up context file:
@@ -242,5 +242,5 @@ Terminate. Do not invoke any agent or tool again.
 - Do not include raw JSON unless it is part of a tool call.
 - Do not fabricate engine results.
 - Idempotency: if Step 3 was already completed (promote already executed), skip it entirely.
-- Session UUID: use the output of the `exec sh -c 'ls -t ...'` command verbatim. Do NOT invent or substitute a UUID.
+- Session UUID: use the output of `bin/session_key.sh` (the routing-key UUID) verbatim. Do NOT invent, substitute, or use the raw session-file basename.
 - The `contingent_plan_run_id` is the ID to promote — use it exactly as received from the incoming task.

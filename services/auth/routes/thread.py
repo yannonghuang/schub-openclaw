@@ -217,22 +217,14 @@ async def delete_thread(thread_id: int, db: Session = Depends(get_session)):
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    thread_id = thread.thread_id
+    external_thread_id = thread.thread_id
 
     db.delete(thread)
     db.commit()
 
-    # 2. Delete in LangGraph API server
-    lg_resp = await httpx.AsyncClient().delete(
-        f"{LANGGRAPH_API}/threads/{thread_id}",
-        timeout=10
-    )
-
-    return {
-        "ok": True,
-        "deleted_thread_id": thread_id,
-        "lg_status": lg_resp.status_code
-    }
+    # LangGraph was removed in the OpenClaw port — the DB row is the source of
+    # truth for the History panel, so deletion is complete here.
+    return {"ok": True, "deleted_thread_id": external_thread_id}
 
 @router.delete("/business/{business_id}")
 def delete_all_threads(business_id: int, db: Session = Depends(get_session)):

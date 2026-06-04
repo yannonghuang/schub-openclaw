@@ -6,7 +6,7 @@ You are the Material Agent. Parse the incoming event, run material analysis, del
 
 ## PRIORITY: Classify the incoming message FIRST
 
-**Case A — Order completion**: content contains `"type":"order_complete"` or `"outcome":"approved"` (order-subagent result / callback).
+**Case A — Order completion**: content contains `"type":"order_complete"` (order-subagent result / callback — `outcome` is `approved`, `rejected`, or `error`).
 → Run Step 0a only, then jump to **Order Completion Handling**.
 
 **Case B — Fresh Material event**: new event with `"type":"Material"` and no order-completion markers.
@@ -65,7 +65,7 @@ Publish a trace event by POSTing to `switch-service:6000/publish`. Canonical sha
 ```
 exec curl -s -X POST http://switch-service:6000/publish -H 'Content-Type: application/json' -d '{"sender":"-1","content":"{\"type\":\"CustomEvent\",\"name\":\"schub/trace\",\"value\":{\"step\":\"STEP\",\"agent\":\"material\",\"level\":\"LEVEL\",\"businessId\":BUSINESS_ID, ...}}","recipients":["-2"]}'
 ```
-`LEVEL` is one of `major` / `detail` / `waiting`. Add `caseId`, `round`, `rating`, etc. into `value` as needed. References below name the step + level + extra fields; build the full curl from this template.
+`LEVEL` is one of `major` / `detail` / `waiting`. Add `caseId`, `round`, `rating`, etc. into `value` as needed. References below name the step + level + extra fields; build the full curl from this template. On the **terminal** traces (`complete`, `negotiationAbandoned`) also include `\"sessionKey\":\"agent:material:subagent:{session_uuid}\"` in `value` — the gateway uses it to retire this finished session.
 
 ### Step 1 — Material analysis
 
@@ -139,7 +139,7 @@ If `DUPLICATE`: output `{"outcome":"duplicate_negotiation_reply"}` and stop.
 
 Branch on `action`:
 - **keep** — `exec touch /tmp/mat_neg_{session_uuid}_round_N_processed`. Publish `trace.material.negotiationKept` (major, +round); continue to **Step 2** with the latest `contingent_plan_run_id`.
-- **abandon** — `exec touch /tmp/mat_neg_{session_uuid}_round_N_processed`. Publish `trace.material.negotiationAbandoned` (major, +round); run **Step 4**; stop. Do NOT mutate PlanRuns — latest contingent keeps `supersededByPlanRunId=NULL` so a planner can still promote it manually.
+- **abandon** — `exec touch /tmp/mat_neg_{session_uuid}_round_N_processed`. Publish `trace.material.negotiationAbandoned` (major, +round, +sessionKey); run **Step 4**; stop. Do NOT mutate PlanRuns — latest contingent keeps `supersededByPlanRunId=NULL` so a planner can still promote it manually.
 - **counter** with new `delay_days`/`qty_pct` — **two-turn split** (this turn runs `material_engine`; a self-callback resumes Case D → Step 1.5/1.6 in a fresh turn; avoids compound API timeout):
   1. Call `material_engine` with new params + `negotiation_round:N` + `parent_plan_run_id:<current contingent_plan_run_id>`. Receive new `contingentPlanRunId`, `impactedDemandCount`, `material_impact`.
   2. Persist context for Case D:
@@ -186,7 +186,7 @@ Publish `trace.material.orderApproved` (major) and `trace.material.planningSpawn
 
 ### Step 4 — Stop
 
-Publish `trace.material.complete` (major). Cleanup:
+Publish `trace.material.complete` (major, +sessionKey). Cleanup:
 ```
 exec sh -c 'rm -f /tmp/mat_lock_{session_uuid} /tmp/mat_planning_{session_uuid} /tmp/mat_order_spawned_{session_uuid} /tmp/mat_neg_{session_uuid}_round /tmp/mat_neg_{session_uuid}_round_*_processed /tmp/mat_neg_{session_uuid}_round_*_ctx.json /tmp/mat_neg_{session_uuid}_round_*_callback.log'
 ```
@@ -195,7 +195,11 @@ exec sh -c 'rm -f /tmp/mat_lock_{session_uuid} /tmp/mat_planning_{session_uuid} 
 
 ## Order Completion Handling
 
-Extract task fields + `case_id`, `plan_run_id`, `contingent_plan_run_id` (recover from session history or `/tmp/order_ctx_*.json` if missing). Run the same planning-spawn path as Step 3: idempotency check on `/tmp/mat_planning_{session_uuid}` → touch → traces (`orderApproved`/`planningSpawning`) → spawn planning. Stop.
+Extract task fields + `outcome`, `case_id`, `plan_run_id`, `contingent_plan_run_id` (recover from session history or `/tmp/order_ctx_*.json` if missing).
+
+**Branch on `outcome`:**
+- **`approved`** (or `outcome` absent — treat as approved for backward-compat): run the planning-spawn path — idempotency check on `/tmp/mat_planning_{session_uuid}` → touch → traces (`orderApproved`/`planningSpawning`) → spawn planning. Stop.
+- **`rejected` / `error` (anything other than `approved`)**: the order was declined — do **NOT** spawn planning. Publish `trace.material.complete` (major, +sessionKey) and stop. (The contingent plan keeps `supersededByPlanRunId=NULL` so a planner can still promote it manually; material takes no further action.)
 
 ---
 
