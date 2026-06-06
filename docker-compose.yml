@@ -181,19 +181,6 @@ services:
       retries: 5
       start_period: 10s
 
-  # ── Admin ────────────────────────────────────────────────────────────────────
-  pgadmin:
-    image: docker.io/dpage/pgadmin4:latest
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@example.com
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
-    ports:
-      - "10000:80"
-    volumes:
-      - pgadmin-data:/var/lib/pgadmin/
-    depends_on:
-      - db
-
   # ── Allocator ────────────────────────────────────────────────────────────────
   db-init-allocator:
     image: pgvector/pgvector:pg17

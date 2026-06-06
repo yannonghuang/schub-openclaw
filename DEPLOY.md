@@ -71,7 +71,7 @@ full list of container ports and whether they are published to the host.
 
 Outbound HTTPS (443) required from the Prod VM at runtime:
 
-- **Docker Hub** — pulls `nginx`, `redis`, `pgvector/pgvector`, `dpage/pgadmin4`, and `registry:2` (base images referenced directly by compose; not in your private registry):
+- **Docker Hub** — **not needed at runtime** when using the image-based deploy: `make push` mirrors the base images (`nginx`, `redis`, `pgvector/pgvector`) into your private registry, and `docker-compose.prod.yml` references them via `${REGISTRY}…`, so the prod VM pulls app + infra entirely from the local registry. The only one-time Docker Hub pull on the VM is `registry:2` itself (it can't be served by the registry it is — see [Docker registry](#docker-registry)); seed it once or `docker save`/`load` it. If you instead run the *source-based* deploy (no private registry), the VM does pull the base images directly from Docker Hub:
   - `registry-1.docker.io` — registry API
   - `auth.docker.io` — token exchange
   - `production.cloudflare.docker.com` — layer blob CDN (layers aren't served from the registry host itself)
@@ -111,7 +111,7 @@ One-time outbound HTTPS required **before** Docker is installed (host bootstrap)
 
 **生产 VM 运行时出站访问**（443/tcp）：
 
-- **Docker Hub**（拉取 `nginx`、`redis`、`pgvector/pgvector`、`dpage/pgadmin4`、`registry:2` 等基础镜像，这些未进入私有镜像仓库，compose 直接引用）：`registry-1.docker.io`（API）、`auth.docker.io`（鉴权）、`production.cloudflare.docker.com`（层数据 CDN，层不是从 registry 主机直出）
+- **Docker Hub**（拉取 `nginx`、`redis`、`pgvector/pgvector`、`registry:2` 等基础镜像，这些未进入私有镜像仓库，compose 直接引用）：`registry-1.docker.io`（API）、`auth.docker.io`（鉴权）、`production.cloudflare.docker.com`（层数据 CDN，层不是从 registry 主机直出）
 - `api.anthropic.com`：始终需要——openclaw 网关的 LLM 出站。默认 `LLM_PROVIDER=openclaw` 时，allocator 的影响评估与规划副驾驶经内部网关 `http://openclaw:18789` 间接复用这条通道（allocator → openclaw → Anthropic）；仅当 `LLM_PROVIDER=anthropic` 时，allocator 才会直接调用 `api.anthropic.com`。
 - `api.openai.com`：**条件项**——仅当 `LLM_PROVIDER=openai` 时，allocator 的影响评估与规划副驾驶才会调用此地址。
 - SMTP 主机（587/465）与 IMAP 主机（993）——HITL 邮件往返
@@ -460,6 +460,8 @@ Run a private registry on the VM (recommended — both machines can reach the VM
 docker run -d --network=host --restart=always --name registry registry:2
 ```
 
+> **`registry:2` is the one image that can't come from the registry itself** (it *is* the registry). Pull it once from Docker Hub (above), or on a fully air-gapped VM transfer it with `docker save registry:2 | ssh vm 'docker load'`. Every *other* image — app and base infra — is served from this registry.
+
 Verify from the build machine:
 ```bash
 curl http://192.168.x.x:5000/v2/    # should return {}
@@ -490,6 +492,10 @@ Then build and push all images:
 make push
 ```
 
+> `make push` builds and pushes the `schub-*` app images **and** mirrors the upstream base images (`nginx`, `redis`, `pgvector/pgvector`) into the same registry (via `scripts/mirror-base.sh`). So after `make push`, the registry holds everything the VM needs — the prod VM pulls 100% from local with no Docker Hub egress. Re-mirror base images on their own anytime with `make mirror-base`.
+>
+> The mirror keeps the upstream tags (`nginx:latest`, `redis:7`, `pgvector/pgvector:pg17`) — they must match the `${REGISTRY}…` lines in `docker-compose.prod.yml`. For reproducible prod, pin both sides to fixed tags/digests instead of `latest`.
+
 ---
 
 ### On the VM (no source code needed)
@@ -504,6 +510,8 @@ Makefile
 .env.prod               (fill in from .env.example — see below)
 certs/                  (TLS cert — generate with mkcert as in Step 2 above)
 ```
+
+> **`scripts/` is *not* needed on the VM.** `make push` / `make mirror-base` (which use `scripts/build-push.sh` + `scripts/mirror-base.sh`) run on the **build machine**, and the prod-run targets (`prod-pull`, `ps-prod`, `seed-db-prod`, …) don't call any host script. Copy an individual helper only if you want to run it *on* the VM — e.g. `scripts/smoke_test_kotlin.sh` (verification) or `scripts/clean-heartbeat-sessions.sh` (ops).
 
 Create `.env.prod` from the template:
 
@@ -540,7 +548,7 @@ make prod-pull
 make ps-prod
 ```
 
-> Volumes (`schub_db-data`, `schub_pgadmin-data`, `schub_openclaw-workspace`) are auto-created by compose on first `up`; no separate setup step is needed. `make volumes-prod` is still available as an idempotent helper if you prefer to create them explicitly first. As with dev, plain `make down-prod` is safe; `docker compose down -v` will delete the volumes and the data.
+> Volumes (`schub_db-data`, `schub_openclaw-workspace`) are auto-created by compose on first `up`; no separate setup step is needed. `make volumes-prod` is still available as an idempotent helper if you prefer to create them explicitly first. As with dev, plain `make down-prod` is safe; `docker compose down -v` will delete the volumes and the data.
 
 Seed the database (first time only):
 ```bash
@@ -744,4 +752,4 @@ Do **not** use `--volumes` or `down -v` — that deletes the DB/Redis/openclaw v
 | allocator-frontend | 3001 | Allocator Next.js UI |
 | db (PostgreSQL) | 5432 | Shared database (`schub` + `allocator`) |
 | redis | 6379 | Cache + message bus |
-| pgadmin | 10000 | DB admin UI (dev/ops tool) |
+| pgadmin | 10000 | DB admin UI (**dev only** — not deployed to prod) |
