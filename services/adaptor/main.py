@@ -188,36 +188,77 @@ def extract_body(msg: email.message.Message) -> str:
 # OpenClaw resume
 # ---------------------------------------------------------------------------
 
-def resume_session(session_key: str, agent_id: str, body: str) -> None:
+# A resumed HITL turn can fail transiently — most often when the LLM provider
+# has a brief connection blip (all same-provider fallbacks time out together).
+# Retry with backoff so a recoverable blip doesn't strand the agent; the provider
+# is usually back within a minute or two.
+RESUME_MAX_ATTEMPTS = int(os.getenv("RESUME_MAX_ATTEMPTS", "4"))
+RESUME_BACKOFF      = int(os.getenv("RESUME_BACKOFF_SECONDS", "20"))   # linear: 20s, 40s, 60s
+RESUME_READ_TIMEOUT = float(os.getenv("RESUME_READ_TIMEOUT", "240"))   # one turn's max wall time
+
+
+def _resume_once(session_key: str, agent_id: str, content: str) -> bool:
+    """Run one resume turn. Returns True only if the agent produced a non-empty
+    response. A transient provider failure yields a non-200 or an empty/errored
+    turn — treated as retryable rather than a delivered reply."""
+    try:
+        resp = httpx.post(
+            f"{OPENCLAW_URL}/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENCLAW_TOKEN}",
+                "x-openclaw-session-key": session_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": f"openclaw:{agent_id}" if agent_id else "openclaw",
+                "messages": [{"role": "user", "content": content}],
+                "stream": False,
+            },
+            timeout=httpx.Timeout(connect=10.0, read=RESUME_READ_TIMEOUT, write=10.0, pool=10.0),
+        )
+    except Exception as e:
+        log.warning("Resume attempt errored for %s: %s", session_key, e)
+        return False
+    if resp.status_code != 200:
+        log.warning("Resume attempt for %s returned HTTP %s: %s", session_key, resp.status_code, resp.text[:300])
+        return False
+    try:
+        out = (resp.json().get("choices") or [{}])[0].get("message", {}).get("content") or ""
+    except Exception as e:
+        log.warning("Resume attempt for %s: unparseable response: %s", session_key, e)
+        return False
+    if not out.strip():
+        log.warning("Resume attempt for %s produced no content (likely provider failure) — retrying", session_key)
+        return False
+    log.info("Resumed session %s: turn produced %d chars", session_key, len(out))
+    return True
+
+
+def resume_session(session_key: str, agent_id: str, body: str, on_success) -> None:
+    """Resume the parked agent session with the human's reply, retrying on
+    transient failure. `on_success()` runs only once a turn actually completes —
+    so the HITL is marked resumed (and the reply consumed) only after it lands,
+    never on a failed turn. If every attempt fails the HITL is left pending, so a
+    re-reply (or operator re-drive) can deliver it later."""
     content = f"Human replied to HITL email. Reply: {body[:500]}"
 
-    def _stream_to_completion() -> None:
-        try:
-            with httpx.stream(
-                "POST",
-                f"{OPENCLAW_URL}/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENCLAW_TOKEN}",
-                    "x-openclaw-session-key": session_key,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": f"openclaw:{agent_id}" if agent_id else "openclaw",
-                    "messages": [{"role": "user", "content": content}],
-                    "stream": True,
-                },
-                timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0),
-            ) as resp:
-                log.info("Resumed session %s: HTTP %s", session_key, resp.status_code)
-                # Consume stream to keep connection alive until agent completes
-                for chunk in resp.iter_bytes():
-                    pass
-                log.info("Session %s stream complete", session_key)
-        except Exception as e:
-            log.error("Failed to resume session %s: %s", session_key, e)
+    def _run() -> None:
+        for attempt in range(1, RESUME_MAX_ATTEMPTS + 1):
+            if _resume_once(session_key, agent_id, content):
+                try:
+                    on_success()
+                except Exception as e:
+                    log.error("Resume post-success hook failed for %s: %s", session_key, e)
+                return
+            if attempt < RESUME_MAX_ATTEMPTS:
+                delay = RESUME_BACKOFF * attempt
+                log.warning("Resume attempt %d/%d failed for %s; retrying in %ds",
+                            attempt, RESUME_MAX_ATTEMPTS, session_key, delay)
+                time.sleep(delay)
+        log.error("Resume FAILED after %d attempts for %s — HITL left pending; a re-reply will retry",
+                  RESUME_MAX_ATTEMPTS, session_key)
 
-    t = threading.Thread(target=_stream_to_completion, daemon=True)
-    t.start()
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -283,14 +324,17 @@ def process_message(uid: bytes, raw: bytes) -> None:
     body = extract_body(msg)
     log.info("Resuming session %s (matched HITL %r)", hitl["session_key"], matched_id)
 
-    # Delegate classification entirely to the agent — adaptor stays stateless
-    resume_session(hitl["session_key"], hitl.get("agent_id", ""), body)
+    # Delegate classification entirely to the agent — adaptor stays stateless.
+    # Mark the HITL resumed only AFTER the resume turn actually completes, so a
+    # transient provider failure can't silently consume the reply (the turn is
+    # retried; if it ultimately fails, the HITL stays pending for a re-reply).
+    def _mark_resumed() -> None:
+        try:
+            httpx.put(f"{BACKEND_URL}/email-hitl/{matched_id}/resume", timeout=10)
+        except Exception as e:
+            log.warning("Failed to mark HITL %r as resumed: %s", matched_id, e)
 
-    # Mark HITL as resumed to prevent duplicate processing on re-delivery
-    try:
-        httpx.put(f"{BACKEND_URL}/email-hitl/{matched_id}/resume", timeout=10)
-    except Exception as e:
-        log.warning("Failed to mark HITL %r as resumed: %s", matched_id, e)
+    resume_session(hitl["session_key"], hitl.get("agent_id", ""), body, on_success=_mark_resumed)
 
     # Publish schub/hitl_reply so the Agent UI reflects the email reply
     try:
