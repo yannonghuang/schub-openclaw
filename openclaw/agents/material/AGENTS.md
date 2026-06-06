@@ -156,6 +156,11 @@ Branch on `action`:
 
 ### Step 2 — Route to Order Agent
 
+Close any open negotiation wait for this session first (idempotent no-op if it was already resolved by the case-page reply, superseded, or never opened — e.g. a LOW rating that skipped Step 1.6). This guarantees the case page stops showing "negotiating" even when the reply reached you through a channel other than `/negotiation-reply` (direct webchat):
+```
+exec curl -s -X POST http://allocator-backend:8000/cases/CASE_ID/negotiation-waits/resolve -H 'Content-Type: application/json' -d '{"sessionKey":"agent:material:subagent:{session_uuid}","action":"agent_resolved"}'
+```
+
 ```
 exec touch /tmp/mat_order_spawned_{session_uuid}
 ```
@@ -184,9 +189,15 @@ Publish `trace.material.orderApproved` (major) and `trace.material.planningSpawn
 {"agentId":"planning","task":"{\"business_id\":1,\"message_id\":\"123\",\"type\":\"Planning\",\"original_type\":\"Material\",\"source\":2,\"recipients\":[1],\"supply_id\":\"S_ID\",\"delivery_delay_days\":30,\"quantity_decrease_pct\":0,\"case_id\":19,\"plan_run_id\":35,\"contingent_plan_run_id\":47}","mode":"run"}
 ```
 
+After the planning spawn is accepted, **continue to Step 4 — do not end the turn here.** Step 4's `trace.material.complete` publish is the *only* signal that retires this session; skipping it leaves a finished session lingering idle in the store.
+
 ### Step 4 — Stop
 
-Publish `trace.material.complete` (major, +sessionKey). Cleanup:
+**MANDATORY on every terminal path, including the happy path.** Publish `trace.material.complete` (major, +sessionKey) — this terminal trace is the gateway's sole session-retire signal (switch-service flags it for GC by `sessionKey`, then reaps the idle session). Omitting it is exactly what leaves a completed run sitting idle and un-retired. Then close any open negotiation wait for this session (idempotent no-op if already resolved; covers the abandon and order-rejected/error paths, which never pass through Step 2):
+```
+exec curl -s -X POST http://allocator-backend:8000/cases/CASE_ID/negotiation-waits/resolve -H 'Content-Type: application/json' -d '{"sessionKey":"agent:material:subagent:{session_uuid}","action":"agent_resolved"}'
+```
+Cleanup:
 ```
 exec sh -c 'rm -f /tmp/mat_lock_{session_uuid} /tmp/mat_planning_{session_uuid} /tmp/mat_order_spawned_{session_uuid} /tmp/mat_neg_{session_uuid}_round /tmp/mat_neg_{session_uuid}_round_*_processed /tmp/mat_neg_{session_uuid}_round_*_ctx.json /tmp/mat_neg_{session_uuid}_round_*_callback.log'
 ```
@@ -198,7 +209,7 @@ exec sh -c 'rm -f /tmp/mat_lock_{session_uuid} /tmp/mat_planning_{session_uuid} 
 Extract task fields + `outcome`, `case_id`, `plan_run_id`, `contingent_plan_run_id` (recover from session history or `/tmp/order_ctx_*.json` if missing).
 
 **Branch on `outcome`:**
-- **`approved`** (or `outcome` absent — treat as approved for backward-compat): run the planning-spawn path — idempotency check on `/tmp/mat_planning_{session_uuid}` → touch → traces (`orderApproved`/`planningSpawning`) → spawn planning. Stop.
+- **`approved`** (or `outcome` absent — treat as approved for backward-compat): run the planning-spawn path — idempotency check on `/tmp/mat_planning_{session_uuid}` → touch → traces (`orderApproved`/`planningSpawning`) → spawn planning → **Step 4** (mandatory: its `trace.material.complete` publish is what retires this session). Do not stop before Step 4.
 - **`rejected` / `error` (anything other than `approved`)**: the order was declined — do **NOT** spawn planning. Publish `trace.material.complete` (major, +sessionKey) and stop. (The contingent plan keeps `supersededByPlanRunId=NULL` so a planner can still promote it manually; material takes no further action.)
 
 ---
