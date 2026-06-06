@@ -69,13 +69,25 @@ services:
     environment:
       - NODE_ENV=production
 
+  # ── Base images served from the private registry ────────────────────────────
+  # Mirrored by `make push` (scripts/mirror-base.sh) so the prod VM pulls app +
+  # infra entirely from the local registry — no Docker Hub egress at runtime.
+  # Tags must match scripts/mirror-base.sh. (registry:2 is bootstrapped from Hub
+  # or docker save/load — it can't be served by the registry it is.)
+  nginx:
+    image: ${REGISTRY}nginx:latest
+  db:
+    image: ${REGISTRY}pgvector/pgvector:pg17
+  redis:
+    image: ${REGISTRY}redis:7
+  db-init-allocator:
+    image: ${REGISTRY}pgvector/pgvector:pg17
+
 volumes:
   # Stable named volumes; compose auto-creates if missing instead of failing
-  # (e.g. after `docker volume rm` to reset pgadmin / postgres state).
+  # (e.g. after `docker volume rm` to reset postgres state).
   # Existing volumes with these names are still adopted by name.
   db-data:
     name: schub_db-data
-  pgadmin-data:
-    name: schub_pgadmin-data
   openclaw-workspace:
     name: schub_openclaw-workspace

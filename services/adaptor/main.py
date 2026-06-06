@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import socket
 import threading
 import time
 
@@ -34,6 +35,7 @@ IMAP_PORT      = int(os.getenv("IMAP_PORT", "993"))
 IMAP_USER      = os.getenv("IMAP_USER", "")
 IMAP_PASS      = os.getenv("IMAP_PASS", "")
 POLL_INTERVAL  = int(os.getenv("POLL_INTERVAL", "30"))   # seconds
+IMAP_TIMEOUT   = int(os.getenv("IMAP_TIMEOUT", "30"))     # socket timeout (s) — guards against half-dead connections hanging forever
 BACKEND_URL    = os.getenv("BACKEND_URL", "http://auth-service:4000")
 OPENCLAW_URL   = os.getenv("OPENCLAW_URL", "http://openclaw:18789")
 OPENCLAW_TOKEN = os.getenv("OPENCLAW_TOKEN", "c34d9510b42222e8ff613d22f2d3dfc80b4eeb818aee7acc")
@@ -354,19 +356,37 @@ def poll_once(imap: imaplib.IMAP4_SSL) -> None:
         _save_seen()
 
 
+def _enable_keepalive(sock) -> None:
+    """Enable TCP keepalive so a silently-dropped peer is detected even if no
+    IMAP command is in flight — complements the socket timeout."""
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        for opt, val in (("TCP_KEEPIDLE", 60), ("TCP_KEEPINTVL", 20), ("TCP_KEEPCNT", 3)):
+            o = getattr(socket, opt, None)
+            if o is not None:
+                sock.setsockopt(socket.IPPROTO_TCP, o, val)
+    except OSError:
+        pass
+
+
 def run() -> None:
     _load_seen()
-    log.info("IMAP adaptor starting — host=%s user=%s poll=%ds", IMAP_HOST, IMAP_USER, POLL_INTERVAL)
+    log.info("IMAP adaptor starting — host=%s user=%s poll=%ds timeout=%ds", IMAP_HOST, IMAP_USER, POLL_INTERVAL, IMAP_TIMEOUT)
     while True:
         try:
-            with imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT) as imap:
+            # timeout= is essential: without it, a half-dead connection (e.g.
+            # after a broken pipe) blocks recv() forever and the poller wedges —
+            # never reading replies, leaving HITL agent sessions stuck awaiting.
+            with imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=IMAP_TIMEOUT) as imap:
+                _enable_keepalive(imap.sock)
                 imap.login(IMAP_USER, IMAP_PASS)
                 log.info("IMAP connected")
                 while True:
                     poll_once(imap)
                     time.sleep(POLL_INTERVAL)
-        except imaplib.IMAP4.abort as e:
-            log.warning("IMAP connection dropped, reconnecting: %s", e)
+        except (imaplib.IMAP4.abort, OSError) as e:
+            # OSError covers socket.timeout / broken pipe / connection reset.
+            log.warning("IMAP connection dropped, reconnecting in 5s: %s", e)
             time.sleep(5)
         except Exception as e:
             log.error("Unexpected error, reconnecting in 10s: %s", e)

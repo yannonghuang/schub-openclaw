@@ -1,7 +1,7 @@
 DEV_FILES  = --env-file .env.dev  -f docker-compose.yml -f docker-compose.dev.yml
 PROD_FILES = --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml
 
-.PHONY: dev dev-d dev-build prod prod-pull build push down down-prod logs logs-prod ps ps-prod seed-db psql
+.PHONY: dev dev-d dev-build prod prod-pull build push push-all mirror-base down down-prod logs logs-prod ps ps-prod seed-db psql
 
 # ── Development ───────────────────────────────────────────────────────────────
 
@@ -30,8 +30,14 @@ prod-pull:                    ## Pull latest images, start prod stack, prune sup
 build:                        ## Build all images (reads REGISTRY/TAG from .env.dev or env)
 	docker compose $(DEV_FILES) build
 
-push:                         ## Build and push all images to registry (reads REGISTRY/TAG from .env.dev)
+push:                         ## Build only changed images, then tag+push all + mirror base images
 	@set -a && . ./.env.dev && set +a && PATH="/usr/local/bin:$$PATH" ./scripts/build-push.sh
+
+push-all:                     ## Force a full rebuild of every image, then push (use after base/dep bumps)
+	@set -a && . ./.env.dev && set +a && PATH="/usr/local/bin:$$PATH" FORCE=1 ./scripts/build-push.sh
+
+mirror-base:                  ## Mirror upstream base images (nginx/redis/pgvector) into the registry
+	@set -a && . ./.env.dev && set +a && ./scripts/mirror-base.sh
 
 # ── Common ────────────────────────────────────────────────────────────────────
 
@@ -74,7 +80,6 @@ volumes-dev:                  ## Create local named volumes for dev (first-time 
 
 volumes-prod:                 ## Create external named volumes for prod (first-time setup)
 	docker volume create schub_db-data
-	docker volume create schub_pgadmin-data
 	docker volume create schub_openclaw-workspace
 
 help:                         ## Show this help
