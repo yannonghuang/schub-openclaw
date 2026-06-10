@@ -89,6 +89,16 @@ services:
     build:
       context: ../allocator_inno_kotlin/backend-kotlin
       dockerfile: Dockerfile
+      args:
+        # JVM tooling (the Gradle wrapper bootstrap + dep resolution) ignores the
+        # HTTP(S)_PROXY env vars Docker injects, so pass the proxy as JVM system
+        # properties. `make dev-build` auto-derives this from the shell proxy env
+        # (rewriting localhost/127.0.0.1 → host.docker.internal). Empty ⇒ direct egress.
+        GRADLE_PROXY_OPTS: "${GRADLE_PROXY_OPTS:-}"
+    # Let the build/runtime container reach a proxy running on the host (Docker
+    # Desktop maps this automatically; explicit for Linux/host-gateway parity).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ../allocator_inno_kotlin/csv:/data/csv:ro
 
