@@ -5,6 +5,25 @@ PROD_FILES = --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.y
 
 # ── Development ───────────────────────────────────────────────────────────────
 
+# Derive JVM proxy system properties for the allocator-backend Gradle build from
+# the shell proxy env (java.net ignores HTTP(S)_PROXY). localhost/127.0.0.1 is
+# rewritten to host.docker.internal so the build container can reach a proxy on
+# the host. Mirrors scripts/build-push.sh. Override by exporting GRADLE_PROXY_OPTS;
+# leave the proxy env unset for direct egress.
+define DERIVE_GRADLE_PROXY
+export GRADLE_PROXY_OPTS="$${GRADLE_PROXY_OPTS:-}"; \
+if [ -z "$$GRADLE_PROXY_OPTS" ]; then \
+  _proxy="$${HTTPS_PROXY:-$${https_proxy:-$${HTTP_PROXY:-$${http_proxy:-}}}}"; \
+  if [ -n "$$_proxy" ]; then \
+    _hp="$${_proxy#*://}"; _hp="$${_hp%%/*}"; _host="$${_hp%%:*}"; _port="$${_hp##*:}"; \
+    [ "$$_port" = "$$_hp" ] && _port=8080; \
+    case "$$_host" in localhost|127.0.0.1|0.0.0.0) _host=host.docker.internal ;; esac; \
+    export GRADLE_PROXY_OPTS="-Dhttp.proxyHost=$$_host -Dhttp.proxyPort=$$_port -Dhttps.proxyHost=$$_host -Dhttps.proxyPort=$$_port -Dhttp.nonProxyHosts=localhost|127.0.0.1|host.docker.internal"; \
+    echo "==> Gradle build proxy derived from env: $$_host:$$_port (override via GRADLE_PROXY_OPTS=)"; \
+  fi; \
+fi
+endef
+
 dev:                          ## Start dev stack (foreground, hot-reload)
 	docker compose $(DEV_FILES) up
 
@@ -12,6 +31,7 @@ dev-d:                        ## Start dev stack (detached)
 	docker compose $(DEV_FILES) up -d
 
 dev-build:                    ## Rebuild and start dev stack
+	@$(DERIVE_GRADLE_PROXY); \
 	docker compose $(DEV_FILES) up --build
 
 # ── Production ────────────────────────────────────────────────────────────────
