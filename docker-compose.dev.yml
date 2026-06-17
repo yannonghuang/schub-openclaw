@@ -99,6 +99,8 @@ services:
     # Desktop maps this automatically; explicit for Linux/host-gateway parity).
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xmx6g
     volumes:
       - ../allocator_inno_kotlin/csv:/data/csv:ro
 
