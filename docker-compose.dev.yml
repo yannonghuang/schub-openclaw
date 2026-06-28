@@ -99,8 +99,11 @@ services:
     # Desktop maps this automatically; explicit for Linux/host-gateway parity).
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Override CMD so JAVA_TOOL_OPTIONS doesn't conflict with the Dockerfile's -Xmx.
+    # Docker VM total = 11.67 GB; other containers ~1.5 GB; leave headroom for off-heap.
+    command: ["java", "-Xmx9g", "-jar", "app.jar"]
     environment:
-      - JAVA_TOOL_OPTIONS=-Xmx8g
+      - JAVA_TOOL_OPTIONS=
     logging:
       driver: json-file
       options:

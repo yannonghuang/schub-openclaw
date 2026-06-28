@@ -38,13 +38,9 @@ openclaw/memory/
 openclaw/plugin-skills/
 openclaw/openclaw.json.bak*
 openclaw/openclaw.json
-openclaw/tasks/runs.sqlite
-openclaw/tasks/runs.sqlite-shm
-openclaw/tasks/runs.sqlite-wal
+openclaw/tasks/runs.sqlite*
 openclaw/exec-approvals.json
-openclaw/flows/registry.sqlite
-openclaw/flows/registry.sqlite-shm
-openclaw/flows/registry.sqlite-wal
+openclaw/flows/registry.sqlite*
 openclaw/openclaw.json.last-good
 openclaw/plugin-runtime-deps/
 
