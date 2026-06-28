@@ -30,9 +30,9 @@ dev:                          ## Start dev stack (foreground, hot-reload)
 dev-d:                        ## Start dev stack (detached)
 	docker compose $(DEV_FILES) up -d
 
-dev-build:                    ## Rebuild and start dev stack
+dev-build:                    ## Rebuild and start dev stack (busts compile layer, caches deps)
 	@$(DERIVE_GRADLE_PROXY); \
-	docker compose $(DEV_FILES) up --build
+	docker compose $(DEV_FILES) build --build-arg CACHEBUST=$$(date +%s) && docker compose $(DEV_FILES) up
 
 # ── Production ────────────────────────────────────────────────────────────────
 
