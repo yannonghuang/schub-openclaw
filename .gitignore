@@ -34,6 +34,7 @@ openclaw/workspace-attestations/
 openclaw/subagents/
 openclaw/telegram/
 openclaw/update-check.json
+openclaw/update-check.json.migrated
 openclaw/memory/
 openclaw/plugin-skills/
 openclaw/openclaw.json.bak*
