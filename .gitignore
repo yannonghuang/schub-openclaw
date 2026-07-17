@@ -44,6 +44,8 @@ openclaw/exec-approvals.json
 openclaw/flows/registry.sqlite*
 openclaw/openclaw.json.last-good
 openclaw/plugin-runtime-deps/
+openclaw/npm/
+openclaw/skill-workshop/
 
 # build-push.sh per-image source hashes (incremental build cache)
 .push-cache/
