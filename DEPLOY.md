@@ -336,28 +336,35 @@ sudo ufw enable
 
 ## Switching the Allocator LLM Provider
 
-The allocator-backend image has all three provider paths compiled in (`openclaw`, `anthropic`, `openai`). Switching is an env flip + container restart — **no rebuild**.
+The allocator-backend image has all five provider paths compiled in (`openclaw`, `anthropic`, `openai`, `nanogpt`, `dashscope`). Switching is an env flip + container restart — **no rebuild**.
 
 | Mode | When to use | Requires |
 |------|-------------|----------|
 | `openclaw` (default) | Stay inside the stack; reuse whatever OpenClaw is configured for. Works with a Claude Pro OAuth token (`sk-ant-oat01-*`). | `OPENCLAW_TOKEN` (already set for the gateway) |
 | `anthropic` | Call `api.anthropic.com` directly — bypass the gateway. | A real Anthropic API key (`sk-ant-api03-*`) in `ANTHROPIC_API_KEY`. OAuth tokens do **not** work here. Prod VM must have egress to `api.anthropic.com`. |
 | `openai` | Call `api.openai.com` directly. | `OPENAI_API_KEY` in `.env.prod`. Prod VM must have egress to `api.openai.com`. |
+| `nanogpt` | Call NanoGPT's OpenAI-compatible endpoint. | `NANOGPT_API_KEY` in `.env.prod`. Prod VM must have egress to `nano-gpt.com` (or `NANOGPT_BASE_URL` if overridden). |
+| `dashscope` | Call Alibaba Cloud DashScope's OpenAI-compatible endpoint (Qwen models) — including a dedicated/reserved-capacity MaaS deployment, not just the shared public endpoint. | `DASHSCOPE_API_KEY`. `DASHSCOPE_BASE_URL` (defaults to the shared public endpoint; set to your workspace's `https://<id>.<region>.maas.aliyuncs.com/compatible-mode/v1` for a dedicated deployment). `ASSESSMENT_MODEL` to the exact model id the deployment expects. Prod VM must have egress to the DashScope host. |
+
+**Two separate knobs, easy to conflate:** `LLM_PROVIDER` is the generic default (used by OpenClaw-adjacent paths); `ALLOCATOR_LLM_PROVIDER` (independent, defaults to `nanogpt`) is the one that actually pins the allocator's own calls — assessment, planning copilot, and the live planning-agent chat. To switch what the copilot/agent chat uses, set `ALLOCATOR_LLM_PROVIDER`, not `LLM_PROVIDER` (see `Config.kt`'s doc comment for the full breakdown).
 
 **To switch (on the VM):**
 
 ```bash
 # Edit .env.prod — set or change:
-#   LLM_PROVIDER=openai         # or anthropic, or openclaw
-#   OPENAI_API_KEY=sk-...       # only if switching to openai
-#   ANTHROPIC_API_KEY=sk-...    # real API key if switching to anthropic; any value works for openclaw mode
+#   ALLOCATOR_LLM_PROVIDER=dashscope   # or nanogpt, openai, anthropic, openclaw
+#   DASHSCOPE_API_KEY=sk-...           # only if switching to dashscope
+#   DASHSCOPE_BASE_URL=https://...     # only if using a dedicated MaaS deployment
+#   ASSESSMENT_MODEL=qwen3.7-plus      # exact model id for your deployment
+#   OPENAI_API_KEY=sk-...              # only if switching to openai
+#   ANTHROPIC_API_KEY=sk-...           # real API key if switching to anthropic; any value works for openclaw mode
 
 docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml up -d allocator-backend
 ```
 
-**To revert to the default:** remove (or comment out) the `LLM_PROVIDER=` line in `.env.prod` and restart `allocator-backend`. Compose's `${LLM_PROVIDER:-openclaw}` default takes over.
+**To revert to the default:** remove (or comment out) the `ALLOCATOR_LLM_PROVIDER=` line in `.env.prod` and restart `allocator-backend`. Compose's `${ALLOCATOR_LLM_PROVIDER:-nanogpt}` default takes over.
 
-> OpenClaw's own LLM calls always go through `ANTHROPIC_API_KEY` regardless of this setting. `LLM_PROVIDER` only affects the allocator's impact-assessment + planning-copilot calls.
+> OpenClaw's own LLM calls always go through `ANTHROPIC_API_KEY` regardless of this setting. `ALLOCATOR_LLM_PROVIDER` affects the allocator's impact-assessment, planning-copilot, and planning-agent (chat) calls; `LLM_PROVIDER` affects the rest.
 
 ---
 
