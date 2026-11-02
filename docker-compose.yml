@@ -82,7 +82,10 @@ services:
 
   openclaw:
     ports:
-      - "18789:18789"
+      # Loopback only: gateway.tools.allow lifts `exec` from the HTTP deny list (so
+      # spawned subagents keep it), which makes /tools/invoke a shell for any token
+      # holder — keep it off the LAN. Containers reach it as openclaw:18789.
+      - "127.0.0.1:18789:18789"
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - IMAP_HOST=${IMAP_HOST}
@@ -102,6 +105,8 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - NANOGPT_API_KEY=${NANOGPT_API_KEY:-}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - DASHSCOPE_BASE_URL=${DASHSCOPE_BASE_URL:-}
 
     depends_on:
       - db

@@ -115,6 +115,8 @@ async def _notify_complete(job_id: str, update: dict) -> None:
         "output": update.get("result"),
         "error": update.get("error"),
         "idempotencyKey": f"job:{job_id}",
+        "sessionKey": update.get("session_key"),
+        "agentId": update.get("agent_id"),
         "timestamp": int(_time.time() * 1000),
     }
     async with httpx.AsyncClient(timeout=5) as c:
@@ -179,6 +181,28 @@ async def get_job_status(job_id: str):
     if r.status_code == 404:
         raise HTTPException(404, "Job not found")
     return r.json()
+
+
+@app.post("/jobs/material")
+async def submit_material_job(body: dict):
+    """Submit a material_engine job over plain HTTP, for the material agent's helper
+    script (mat.sh). The script submits deterministically with the session's real key,
+    instead of the model copying a key that OpenClaw redacts in transcripts."""
+    from engines import material_engine
+    if "business_id" not in body or "supply_id" not in body:
+        raise HTTPException(400, "business_id and supply_id required")
+    allowed = material_engine.__code__.co_varnames[:material_engine.__code__.co_argcount]
+    return await material_engine(**{k: v for k, v in body.items() if k in allowed})
+
+
+@app.post("/jobs/{job_id}/session")
+async def bind_job_session(job_id: str, body: dict):
+    """Bind the OpenClaw session a job's completion resumes into (see job_store.bind_session)."""
+    session_key = body.get("session_key")
+    if not session_key:
+        raise HTTPException(400, "session_key required")
+    status = await job_store.bind_session(job_id, session_key, body.get("agent_id") or "")
+    return {"bound": True, "job_status": status}
 
 
 @app.post("/jobs/{job_id}/complete")

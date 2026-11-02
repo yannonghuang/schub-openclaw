@@ -84,6 +84,9 @@
       "optionsPresented": "已向用户展示方案",
       "rejected": "维护窗口已被拒绝 — 正在取消",
       "complete": "停产工作流完成"
+    },
+    "watchdog": {
+      "stalled": "⚠️ 运行疑似卡住（{{agent}}）：{{reason}} — 最后一步：{{lastStep}}"
     }
   },
   "run": {
@@ -95,6 +98,10 @@
     "viewTimeline": "查看时间轴 →",
     "hideTimeline": "隐藏时间轴",
     "typeMessage": "输入消息...",
-    "loadingThread": "加载会话中..."
+    "loadingThread": "加载会话中...",
+    "replanTitle": "物料影响重新计划中",
+    "replanProgress": "{{current}}/{{total}} 条需求 · 已用 {{elapsed}}",
+    "replanEta": "预计还需约 {{eta}}",
+    "replanStarting": "正在启动… 已用 {{elapsed}}"
   }
 }

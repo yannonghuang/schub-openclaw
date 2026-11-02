@@ -49,3 +49,4 @@ openclaw/skill-workshop/
 
 # build-push.sh per-image source hashes (incremental build cache)
 .push-cache/
+openclaw/agents/*/openclaw-workspace-state.json

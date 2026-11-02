@@ -5,6 +5,9 @@ langchain-openai==0.3.30
 langgraph==0.6.5
 langchain-mcp-adapters==0.1.9
 mcp==1.14.1
+# mcp 1.14.1 imports pydantic._internal._typing_extra.eval_type_backport, which
+# later pydantic releases removed — unpinned, a rebuild crashes the server on import.
+pydantic==2.11.9
 fastapi-mcp==0.4.0
 
 # test deps

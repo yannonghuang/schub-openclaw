@@ -5,6 +5,7 @@ import {
   type TraceEvent,
   type ToolCallEndEvent,
   type HITLReplyEvent,
+  type ProgressEvent,
   normalizeEvent,
 } from "../types/agui-events";
 
@@ -34,6 +35,7 @@ export function useAGUIStream(
   onTraceEvent: (e: TraceEvent) => void,
   onToolCallEnd: (e: ToolCallEndEvent) => void,
   onHITLReply: (e: HITLReplyEvent) => void,
+  onProgress?: (e: ProgressEvent) => void,
 ): {
   chatMessages: ChatMessage[];
   addMessage: (msg: ChatMessage) => void;
@@ -46,6 +48,8 @@ export function useAGUIStream(
   const onTraceRef = useRef(onTraceEvent);
   const onToolRef = useRef(onToolCallEnd);
   const onHITLRef = useRef(onHITLReply);
+  const onProgressRef = useRef(onProgress);
+  onProgressRef.current = onProgress;
   const threadIdRef = useRef(threadId);
   onTraceRef.current = onTraceEvent;
   onToolRef.current = onToolCallEnd;
@@ -62,10 +66,18 @@ export function useAGUIStream(
   useEffect(() => {
     if (!businessId) return;
 
-    const url = `/agui/sse/${businessId}`;
-    const es = new EventSource(url);
+    // The browser retries a dropped stream by itself, but gives up for good (readyState
+    // CLOSED) after an HTTP error — e.g. nginx's 502 while switch-service restarts —
+    // which left the panel deaf until a page reload. Reopen it ourselves with backoff,
+    // resuming after the last event seen (?since replays what was missed).
+    let es: EventSource;
+    let lastSeq: string | null = null;
+    let retryMs = 1000;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
 
-    es.onmessage = (e: MessageEvent) => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.lastEventId) lastSeq = e.lastEventId;
       let raw: unknown;
       try {
         raw = JSON.parse(e.data);
@@ -77,6 +89,13 @@ export function useAGUIStream(
 
       // Handle events not covered by normalizeEvent (new AG-UI types)
       const ev = raw as Record<string, unknown>;
+
+      // ── Engine job progress (not covered by normalizeEvent) ─────────────
+      if (ev.type === "CustomEvent" && ev.name === "schub/progress") {
+        if (threadIdRef.current && ev.threadId && ev.threadId !== threadIdRef.current) return;
+        onProgressRef.current?.(raw as ProgressEvent);
+        return;
+      }
 
       // ── Run lifecycle ──────────────────────────────────────────────────
       if (ev.type === "RunStarted") {
@@ -146,6 +165,9 @@ export function useAGUIStream(
       if (!event) return;
 
       if (event.type === "CustomEvent" && event.name === "schub/trace") {
+        // Traces are broadcast per business; skip ones stamped for another tab's run.
+        // Unstamped traces (no run thread known) still reach every tab.
+        if (threadIdRef.current && event.threadId && event.threadId !== threadIdRef.current) return;
         onTraceRef.current(event);
         return;
       }
@@ -167,11 +189,23 @@ export function useAGUIStream(
       }
     };
 
-    es.onerror = (err) => {
-      console.warn("[useAGUIStream] SSE error (will reconnect):", err);
+    const connect = () => {
+      const url = `/agui/sse/${businessId}` + (lastSeq ? `?since=${encodeURIComponent(lastSeq)}` : "");
+      es = new EventSource(url);
+      es.onmessage = onMessage;
+      es.onopen = () => { retryMs = 1000; };
+      es.onerror = () => {
+        if (disposed || es.readyState !== EventSource.CLOSED) return; // browser is retrying
+        console.warn(`[useAGUIStream] SSE closed — reopening in ${retryMs}ms`);
+        retryTimer = setTimeout(connect, retryMs);
+        retryMs = Math.min(retryMs * 2, 15000);
+      };
     };
+    connect();
 
     return () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
       es.close();
     };
   }, [businessId]); // reconnect only when businessId changes; threadId handled via ref

@@ -210,3 +210,39 @@ async def test_notify_called_on_error():
         assert len(notify_calls) == 1
         _, update = notify_calls[0]
         assert update["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_resume_uses_sessions_send_from_agent_main_session():
+    """Resume goes through /tools/invoke sessions_send (the gateway rejects subagent
+    session-key overrides on /v1/chat/completions), called from the agent's main session."""
+    import job_store
+
+    job_store._SESSION_KEYS["job-6"] = ("agent:material:subagent:abc-123", "material")
+
+    with patch("httpx.AsyncClient") as MockClient:
+        mock_http = AsyncMock()
+        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_http)
+        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"ok": True}
+        mock_http.post = AsyncMock(return_value=resp)
+
+        await job_store._resume_session("job-6", {"status": "completed", "result": {"type": "material_complete"}})
+
+        url = mock_http.post.call_args.args[0]
+        body = mock_http.post.call_args.kwargs["json"]
+        assert url.endswith("/tools/invoke")
+        assert body["name"] == "sessions_send"
+        assert body["sessionKey"] == "agent:material:main"
+        assert body["args"]["sessionKey"] == "agent:material:subagent:abc-123"
+        assert body["args"]["timeoutSeconds"] == 0
+        assert body["args"]["message"].startswith('Job job-6 completed. Result: {"type": "material_complete"}')
+        assert "job-6" not in job_store._SESSION_KEYS
+
+
+def test_requester_session_key_falls_back_to_session_key_agent():
+    import job_store
+
+    assert job_store._requester_session_key("agent:order:subagent:x", "") == "agent:order:main"
+    assert job_store._requester_session_key("weird-key", "") == "agent:main:main"

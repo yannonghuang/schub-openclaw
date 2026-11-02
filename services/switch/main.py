@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routes.switch import router
+from routes.switch import router, start_watchdog
 from utils.redis import init_redis, close_redis
 from fastapi.routing import APIRoute, APIWebSocketRoute
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +17,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await init_redis()
+    start_watchdog()
 
 @app.on_event("shutdown")
 async def shutdown():

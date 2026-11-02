@@ -5,6 +5,11 @@
   },
   "auth": {
     "profiles": {
+      "dashscope:default": {
+        "provider": "dashscope",
+        "mode": "api_key"
+      },
+
       "nanogpt:default": {
         "provider": "nanogpt",
         "mode": "api_key"
@@ -91,6 +96,34 @@
         ]
       },
 
+      "dashscope": {
+        "baseUrl": "${DASHSCOPE_BASE_URL}",
+        "apiKey": "${DASHSCOPE_API_KEY}",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "qwen3.7-plus",
+            "name": "Qwen3.7 Plus",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 16384
+          },
+          {
+            "id": "qwen3.6-plus",
+            "name": "Qwen3.6 Plus",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 16384
+          }
+        ]
+      },
+
       "nanogpt": {
         "baseUrl": "https://nano-gpt.com/api/subscription/v1",
         "apiKey": "${NANOGPT_API_KEY}", 
@@ -147,22 +180,20 @@
     "defaults": {
       "heartbeat": {
         "every": "12h",
-        "model": "nanogpt/openai/gpt-4o-mini" 
+        "model": "dashscope/qwen3.7-plus"
       },
 
       "model": {
-        "primary": "nanogpt/minimax/minimax-m2.7",
+        "primary": "dashscope/qwen3.7-plus",
         "fallbacks": [
-          "nanogpt/minimax/minimax-m2.7",
-          "nanogpt/deepseek-ai/deepseek-v3.1-terminus",
-          "nanogpt/anthropic/claude-haiku-4.5",
-          "nanogpt/anthropic/claude-sonnet-4.6",
-          "nanogpt/openai/gpt-4o"
+          "dashscope/qwen3.7-plus",
+          "dashscope/qwen3.6-plus"
         ]
       },
 
       "models": {
-        "nanogpt/openai/gpt-4o-mini": {}
+        "dashscope/qwen3.7-plus": {},
+        "dashscope/qwen3.6-plus": {}
       },
       "workspace": "/home/node/.openclaw/workspace",
       "subagents": {
@@ -176,6 +207,9 @@
       {
         "id": "main",
         "workspace": "/home/node/.openclaw/agents/main",
+        "tools": {
+          "deny": ["browser", "canvas", "image", "image_generate", "video_generate", "tts", "pdf", "skill_workshop", "node_inference", "file_write", "file_fetch", "dir_fetch", "dir_list", "edit", "write", "apply_patch", "create_goal", "get_goal", "update_goal", "material-engine__prompts_get", "material-engine__prompts_list", "material-engine__resources_list", "material-engine__resources_read", "order-engine__prompts_get", "order-engine__prompts_list", "order-engine__resources_list", "order-engine__resources_read", "supply-chain-engine__prompts_get", "supply-chain-engine__prompts_list", "supply-chain-engine__resources_list", "supply-chain-engine__resources_read", "mes-engine__prompts_get", "mes-engine__prompts_list", "mes-engine__resources_list", "mes-engine__resources_read", "scheduling-engine__prompts_get", "scheduling-engine__prompts_list", "scheduling-engine__resources_list", "scheduling-engine__resources_read"]
+        },
         "subagents": {
           "allowAgents": [
             "order",
@@ -186,29 +220,33 @@
           ]
         },
         "model": {
-          "primary": "nanogpt/anthropic/claude-haiku-4.5",
+          "primary": "dashscope/qwen3.7-plus",
           "fallbacks": [
-            "nanogpt/anthropic/claude-sonnet-4.6",
-            "nanogpt/openai/gpt-4o",
-            "nanogpt/minimax/minimax-m2.7"
+            "dashscope/qwen3.7-plus",
+            "dashscope/qwen3.6-plus"
           ]
         }
       },
       {
         "id": "order",
         "workspace": "/home/node/.openclaw/agents/order",
+        "tools": {
+          "allow": ["exec", "process", "read", "sessions_yield", "sessions_send", "order-engine__order_engine"]
+        },
         "model": {
-          "primary": "nanogpt/anthropic/claude-haiku-4.5",
+          "primary": "dashscope/qwen3.7-plus",
           "fallbacks": [
-            "nanogpt/anthropic/claude-sonnet-4.6",
-            "nanogpt/openai/gpt-4o",
-            "nanogpt/minimax/minimax-m2.7"
+            "dashscope/qwen3.7-plus",
+            "dashscope/qwen3.6-plus"
           ]
         }
       },
       {
         "id": "material",
         "workspace": "/home/node/.openclaw/agents/material",
+        "tools": {
+          "deny": ["browser", "canvas", "image", "image_generate", "video_generate", "tts", "pdf", "skill_workshop", "node_inference", "web_search", "web_fetch", "file_write", "file_fetch", "dir_fetch", "dir_list", "edit", "write", "apply_patch", "memory_search", "memory_get", "create_goal", "get_goal", "update_goal", "sessions_list", "sessions_history", "subagents", "material-engine__material_engine", "material-engine__prompts_get", "material-engine__prompts_list", "material-engine__resources_list", "material-engine__resources_read", "order-engine__prompts_get", "order-engine__prompts_list", "order-engine__resources_list", "order-engine__resources_read", "supply-chain-engine__prompts_get", "supply-chain-engine__prompts_list", "supply-chain-engine__resources_list", "supply-chain-engine__resources_read", "mes-engine__prompts_get", "mes-engine__prompts_list", "mes-engine__resources_list", "mes-engine__resources_read", "scheduling-engine__prompts_get", "scheduling-engine__prompts_list", "scheduling-engine__resources_list", "scheduling-engine__resources_read", "mes-engine__mes_engine", "scheduling-engine__analyze_wo_schedule_impact", "scheduling-engine__assess_maintenance_options", "scheduling-engine__find_earliest_safe_start", "scheduling-engine__analyze_wo_availability", "scheduling-engine__commit_option_pick", "scheduling-engine__execute_safe_plan", "scheduling-engine__promote_plan_run", "scheduling-engine__list_prod_areas", "scheduling-engine__list_locations", "scheduling-engine__find_wos", "scheduling-engine__resolve", "agents_list", "message", "session_status"]
+        },
         "subagents": {
           "allowAgents": [
             "order",
@@ -216,23 +254,24 @@
           ]
         },
         "model": {
-          "primary": "nanogpt/anthropic/claude-haiku-4.5",
+          "primary": "dashscope/qwen3.7-plus",
           "fallbacks": [
-            "nanogpt/anthropic/claude-sonnet-4.6",
-            "nanogpt/openai/gpt-4o",
-            "nanogpt/minimax/minimax-m2.7"
+            "dashscope/qwen3.7-plus",
+            "dashscope/qwen3.6-plus"
           ]
         }
       },
       {
         "id": "planning",
         "workspace": "/home/node/.openclaw/agents/planning",
+        "tools": {
+          "allow": ["exec", "process", "read", "sessions_send", "supply-chain-engine__planning_engine"]
+        },
         "model": {
-          "primary": "nanogpt/anthropic/claude-haiku-4.5",
+          "primary": "dashscope/qwen3.7-plus",
           "fallbacks": [
-            "nanogpt/anthropic/claude-sonnet-4.6",
-            "nanogpt/openai/gpt-4o",
-            "nanogpt/minimax/minimax-m2.7"
+            "dashscope/qwen3.7-plus",
+            "dashscope/qwen3.6-plus"
           ]
         }
       },
@@ -273,6 +312,9 @@
     }
   },
   "tools": {
+    "sessions": {
+      "visibility": "agent"
+    },
     "web": {
       "search": {
         "enabled": true,
@@ -287,7 +329,10 @@
     "ownerDisplay": "raw"
   },
   "session": {
-    "dmScope": "per-channel-peer"
+    "dmScope": "per-channel-peer",
+    "agentToAgent": {
+      "maxPingPongTurns": 0
+    }
   },
   "channels": {
     "telegram": {
@@ -321,6 +366,13 @@
           "enabled": true
         }
       }
+    },
+    "tools": {
+      "allow": [
+        "sessions_send",
+        "sessions_spawn",
+        "exec"
+      ]
     },
     "nodes": {
       "denyCommands": [

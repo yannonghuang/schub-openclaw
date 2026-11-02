@@ -200,21 +200,25 @@ RESUME_READ_TIMEOUT = float(os.getenv("RESUME_READ_TIMEOUT", "240"))   # one tur
 def _resume_once(session_key: str, agent_id: str, content: str) -> bool:
     """Run one resume turn. Returns True only if the agent produced a non-empty
     response. A transient provider failure yields a non-200 or an empty/errored
-    turn — treated as retryable rather than a delivered reply."""
+    turn — treated as retryable rather than a delivered reply.
+
+    Goes through the gateway's sessions_send tool (POST /tools/invoke): OpenClaw
+    >= 2026.6.x rejects `x-openclaw-session-key` overrides for subagent sessions
+    on /v1/chat/completions. Sent from the target agent's own main session
+    (tools.sessions.visibility="agent"); timeoutSeconds makes the gateway wait for
+    the turn's reply, so the non-empty-reply check below still applies."""
+    agent = agent_id or (session_key.split(":")[1] if session_key.startswith("agent:") else "main")
+    timeout_s = int(RESUME_READ_TIMEOUT)
     try:
         resp = httpx.post(
-            f"{OPENCLAW_URL}/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENCLAW_TOKEN}",
-                "x-openclaw-session-key": session_key,
-                "Content-Type": "application/json",
-            },
+            f"{OPENCLAW_URL}/tools/invoke",
+            headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"},
             json={
-                "model": f"openclaw:{agent_id}" if agent_id else "openclaw",
-                "messages": [{"role": "user", "content": content}],
-                "stream": False,
+                "name": "sessions_send",
+                "sessionKey": f"agent:{agent}:main",
+                "args": {"sessionKey": session_key, "message": content, "timeoutSeconds": timeout_s},
             },
-            timeout=httpx.Timeout(connect=10.0, read=RESUME_READ_TIMEOUT, write=10.0, pool=10.0),
+            timeout=httpx.Timeout(connect=10.0, read=RESUME_READ_TIMEOUT + 30, write=10.0, pool=10.0),
         )
     except Exception as e:
         log.warning("Resume attempt errored for %s: %s", session_key, e)
@@ -223,12 +227,28 @@ def _resume_once(session_key: str, agent_id: str, content: str) -> bool:
         log.warning("Resume attempt for %s returned HTTP %s: %s", session_key, resp.status_code, resp.text[:300])
         return False
     try:
-        out = (resp.json().get("choices") or [{}])[0].get("message", {}).get("content") or ""
+        details = (resp.json().get("result") or {}).get("details") or {}
     except Exception as e:
         log.warning("Resume attempt for %s: unparseable response: %s", session_key, e)
         return False
-    if not out.strip():
-        log.warning("Resume attempt for %s produced no content (likely provider failure) — retrying", session_key)
+    status = details.get("status")
+    if status == "accepted":
+        # Turn still running past timeoutSeconds — it was delivered; re-sending would duplicate it.
+        log.info("Resumed session %s: turn still running after %ds, treating as delivered", session_key, timeout_s)
+        return True
+    if details.get("sentBeforeError"):
+        # The reply is already in the session and the turn may have acted on it before
+        # failing (e.g. EmbeddedAttemptSessionTakeoverError when OpenClaw's own subagent
+        # announce writes the same session mid-turn). Re-sending duplicates the human's
+        # reply — seen re-running a plan-run promote and OOM-killing allocator-backend.
+        # Provider blips are retried by the gateway's model fallbacks instead.
+        log.warning("Resumed session %s: turn errored after delivery (%s) — not re-sending",
+                    session_key, details.get("error"))
+        return True
+    out = details.get("reply") or ""
+    if status != "ok" or not out.strip():
+        log.warning("Resume attempt for %s: status=%s error=%s (likely provider failure) — retrying",
+                    session_key, status, details.get("error"))
         return False
     log.info("Resumed session %s: turn produced %d chars", session_key, len(out))
     return True

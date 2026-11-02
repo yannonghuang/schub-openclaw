@@ -4,8 +4,8 @@ Async job lifecycle manager for long-running MCP tools.
 Flow:
   1. submit_job()       — persists job record via auth-service, spawns background task
   2. _run()             — executes engine_fn; updates job status via auth-service on finish
-  3. _resume_session()  — if a session_key was registered, POSTs to OpenClaw gateway
-                          so the waiting agent turn resumes with the job result
+  3. _resume_session()  — if a session_key was registered, sends the job result into
+                          that session via the gateway's sessions_send tool
   4. _notify_complete() — set by main.py at startup; publishes completion event to
                           switch-service (retained for frontend / legacy consumers)
 
@@ -69,14 +69,53 @@ async def submit_job(
     asyncio.create_task(_run(job_id, payload))
 
 
+async def bind_session(job_id: str, session_key: str, agent_id: str) -> str:
+    """(Re)bind the session a job resumes into, overriding the `session_key` the
+    agent passed to the engine tool. OpenClaw redacts session keys in stored
+    transcripts (`agent:…fda4`, `***`), so an agent calling an engine a second time
+    can copy the redacted value from its own history and the completion would
+    resume nowhere. The agent's helper script knows the real key and binds it here.
+
+    If the job already finished (binding raced the completion), resume now.
+    Returns the job status."""
+    _SESSION_KEYS[job_id] = (session_key, agent_id)
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(f"{BACKEND_URL}/async-jobs/{job_id}")
+    job = r.json() if r.status_code == 200 else {}
+    status = job.get("status", "unknown")
+    if status in ("completed", "error"):
+        await _resume_session(job_id, {"status": status, "result": job.get("result"), "error": job.get("error")})
+    return status
+
+
+def _requester_session_key(session_key: str, agent_id: str) -> str:
+    """The session the sessions_send call is made *from*: the target agent's own main
+    session, so `tools.sessions.visibility: "agent"` lets it reach the agent's subagent
+    sessions without needing cross-agent (agentToAgent) permissions."""
+    if not agent_id:
+        parts = session_key.split(":")
+        agent_id = parts[1] if len(parts) > 2 and parts[0] == "agent" else "main"
+    return f"agent:{agent_id}:main"
+
+
 async def _resume_session(job_id: str, update: dict) -> None:
-    """POST to the OpenClaw gateway to resume the agent session that submitted this job.
-    Reads the SSE stream until [DONE] so we don't close the connection prematurely —
-    OpenClaw may abort the agent turn if the client disconnects mid-stream."""
+    """Resume the agent session that submitted this job by injecting the job result
+    into it via the gateway's `sessions_send` tool (POST /tools/invoke).
+
+    OpenClaw >= 2026.6.x rejects `x-openclaw-session-key` overrides in reserved
+    namespaces (`agent:<id>:subagent:...`) on /v1/chat/completions, which is where
+    every async-job caller lives — so that path can no longer resume them. Requires
+    `gateway.tools.allow: ["sessions_send"]` in openclaw.json. timeoutSeconds=0 makes
+    the gateway run the turn server-side and return immediately (no stream to hold)."""
     entry = _SESSION_KEYS.pop(job_id, None)
     if not entry:
         return
     session_key, agent_id = entry
+    if "…" in session_key or "*" in session_key:
+        # Redacted key copied from a transcript: it addresses no session. Wait for the
+        # agent's helper to bind the real one (bind_session), or the switch watchdog.
+        print(f"[job_store] job {job_id}: redacted session key {session_key!r}, awaiting bind", flush=True)
+        return
 
     status = update.get("status", "unknown")
     result = update.get("result") or update.get("error")
@@ -84,36 +123,21 @@ async def _resume_session(job_id: str, update: dict) -> None:
 
     print(f"[job_store] resuming session {session_key} for job {job_id} (status={status})", flush=True)
     try:
-        # Keep the connection open until OpenClaw finishes the agent turn ([DONE] chunk).
-        # read=None disables the body read timeout so long agent turns don't time out.
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
-        ) as c:
-            async with c.stream(
-                "POST",
-                f"{OPENCLAW_URL}/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENCLAW_TOKEN}",
-                    "x-openclaw-session-key": session_key,
-                    "Content-Type": "application/json",
-                },
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            resp = await c.post(
+                f"{OPENCLAW_URL}/tools/invoke",
+                headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"},
                 json={
-                    "model": f"openclaw:{agent_id}" if agent_id else "openclaw",
-                    "messages": [{"role": "user", "content": content}],
-                    "stream": True,
+                    "name": "sessions_send",
+                    "sessionKey": _requester_session_key(session_key, agent_id),
+                    "args": {"sessionKey": session_key, "message": content, "timeoutSeconds": 0},
                 },
-            ) as resp:
-                print(f"[job_store] resume: HTTP {resp.status_code} for session {session_key}", flush=True)
-                if resp.status_code == 200:
-                    # Drain the SSE stream until [DONE] — this keeps the connection alive
-                    # so OpenClaw can complete the full agent turn without a disconnect abort.
-                    async for chunk in resp.aiter_bytes(chunk_size=4096):
-                        if b"[DONE]" in chunk:
-                            break
-                else:
-                    body = await resp.aread()
-                    print(f"[job_store] resume non-200: {body[:300]}", flush=True)
-        print(f"[job_store] resume complete for session {session_key}", flush=True)
+            )
+        print(f"[job_store] resume: HTTP {resp.status_code} for session {session_key}", flush=True)
+        if resp.status_code != 200 or not resp.json().get("ok"):
+            print(f"[job_store] resume failed: {resp.text[:300]}", flush=True)
+        else:
+            print(f"[job_store] resume accepted for session {session_key}", flush=True)
     except Exception as e:
         print(f"[job_store] failed to resume session {session_key} for job {job_id}: {e!r}", flush=True)
 
@@ -144,11 +168,13 @@ async def _run(job_id: str, payload: dict) -> None:
         print(f"[job_store] failed to update job {job_id}: {e}")
 
     # Resume the waiting OpenClaw agent session (fire and forget)
+    session_key, agent_id = _SESSION_KEYS.get(job_id) or (None, None)
     await _resume_session(job_id, update)
 
-    # Also notify switch-service for frontend / legacy consumers
+    # Also notify switch-service for frontend / legacy consumers. The session key rides
+    # along so the run watchdog can re-deliver a completion that never landed.
     if _notify_complete:
         try:
-            await _notify_complete(job_id, update)
+            await _notify_complete(job_id, {**update, "session_key": session_key, "agent_id": agent_id})
         except Exception as e:
             print(f"[job_store] notify_complete failed for {job_id}: {e}")

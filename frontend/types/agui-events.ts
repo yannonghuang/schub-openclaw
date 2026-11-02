@@ -35,10 +35,34 @@ export interface TraceEventValue {
   businessId: number;        // was: business_id
 }
 
+// ---------------------------------------------------------------------------
+// CustomEvent / schub/progress
+// Emitted by mcp-server while a long engine job (the material impact re-plan)
+// runs, so the panel can show a progress bar and ETA.
+// ---------------------------------------------------------------------------
+export interface ProgressEventValue {
+  agent: string;
+  task: string;          // e.g. "material.replan"
+  businessId: number;
+  jobId: string;
+  startedAt: number;     // ms since epoch, when the job started
+  current: number;       // demands planned so far
+  total: number;
+  done: boolean;
+}
+
+export interface ProgressEvent extends AGUIBaseEvent {
+  type: "CustomEvent";
+  name: "schub/progress";
+  value: ProgressEventValue;
+  threadId?: string;
+}
+
 export interface TraceEvent extends AGUIBaseEvent {
   type: "CustomEvent";
   name: "schub/trace";
   value: TraceEventValue;
+  threadId?: string;  // chat thread of the run that emitted it (stamped by switch-service)
 }
 
 // ---------------------------------------------------------------------------

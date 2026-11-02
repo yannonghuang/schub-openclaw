@@ -4,6 +4,7 @@
 
 import ast
 import asyncio
+import json
 import operator
 import time
 import uuid
@@ -467,6 +468,28 @@ async def order_engine(payload: Dict[str, Any]):
     }
 
 
+async def _publish_progress(business_id, job_id: str, started_ms: int,
+                            current: int, total: int, done: bool = False) -> None:
+    """Best-effort `schub/progress` event so the agent panel can show a progress bar
+    and ETA for the (multi-minute) impact re-plan instead of a silent spinner."""
+    import os
+    import httpx
+
+    value = {
+        "agent": "material", "task": "material.replan", "businessId": business_id,
+        "jobId": job_id, "startedAt": started_ms, "current": current, "total": total, "done": done,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=3) as c:
+            await c.post(os.environ.get("SWITCH_URL", "http://switch-service:6000/publish"), json={
+                "sender": "-1",
+                "content": json.dumps({"type": "CustomEvent", "name": "schub/progress", "value": value}),
+                "recipients": ["-2"],
+            })
+    except Exception:
+        pass
+
+
 async def _material_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
     """Background worker for material_engine. Submits the allocator's
     /material-impact replan, polls until done, and returns the
@@ -488,6 +511,9 @@ async def _material_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
     # Optional negotiation-chain fields.
     negotiation_round = data.get("negotiation_round")
     parent_plan_run_id = data.get("parent_plan_run_id")
+    # A supply_id is only unique within a case; without case_id the allocator picks
+    # the active case, else the newest case holding the supply.
+    case_id = data.get("case_id")
 
     allocator_url = os.environ.get("ALLOCATOR_BACKEND_URL", "http://allocator-backend:8000")
 
@@ -504,6 +530,8 @@ async def _material_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
                     submit_body["negotiationRound"] = int(negotiation_round)
                 if parent_plan_run_id is not None:
                     submit_body["parentPlanRunId"] = int(parent_plan_run_id)
+                if case_id is not None:
+                    submit_body["caseId"] = int(case_id)
                 submit_resp = await client.post(
                     f"{allocator_url}/material-impact",
                     json=submit_body,
@@ -520,8 +548,11 @@ async def _material_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
                     else:
                         delay = 1.0
                         max_delay = 8.0
-                        max_wait = 15 * 60.0  # 15 minutes — replans can take 4–5 min
+                        # Re-plans take ~4 min on light configs but ~14 min on case 173's
+                        # (purchasing + critical-leftover reallocation); 15 min was too tight.
+                        max_wait = 45 * 60.0
                         elapsed = 0.0
+                        started_ms = int(time.time() * 1000)
                         while elapsed < max_wait:
                             await asyncio.sleep(delay)
                             elapsed += delay
@@ -537,6 +568,12 @@ async def _material_engine_body(data: Dict[str, Any]) -> Dict[str, Any]:
                                 break
                             poll_body = poll_resp.json()
                             status = poll_body.get("status", "unknown")
+                            progress = poll_body.get("progress") or {}
+                            await _publish_progress(
+                                business_id, job_id, started_ms,
+                                progress.get("current", 0), progress.get("total", 0),
+                                done=status in ("completed", "failed"),
+                            )
                             if status == "completed":
                                 material_impact = poll_body.get("result", {})
                                 break
@@ -583,6 +620,7 @@ async def material_engine(
     session_key: Optional[str] = None,
     agent_id: Optional[str] = None,
     thread_id: Optional[str] = None,
+    case_id: Optional[int] = None,
 ):
     """
     Material engine tool. Runs asynchronously — returns immediately with a job
@@ -593,8 +631,8 @@ async def material_engine(
       1. job_store.submit_job persists the job + spawns the background task
          that calls the allocator's /material-impact endpoint and polls
          /material-impact/status/{jobId} until completion.
-      2. On completion, job_store._resume_session POSTs back into the
-         OpenClaw gateway with `x-openclaw-session-key`, which re-invokes
+      2. On completion, job_store._resume_session calls the OpenClaw
+         gateway's `sessions_send` tool (POST /tools/invoke), which re-invokes
          the material agent's session with a message of shape
          `Job <uuid> completed. Result: {"type":"material_complete",...}`.
       3. The agent's Case E classifier picks that up and proceeds to Step 1.5.
@@ -633,6 +671,8 @@ async def material_engine(
         data["negotiation_round"] = negotiation_round
     if parent_plan_run_id is not None:
         data["parent_plan_run_id"] = parent_plan_run_id
+    if case_id is not None:
+        data["case_id"] = case_id
 
     job_id = str(uuid.uuid4())
 
@@ -656,7 +696,10 @@ async def material_engine(
     return {
         "status": "pending",
         "job_id": job_id,
-        "message": "Material impact replan submitted. You will be notified when complete.",
+        "message": (
+            "Material impact replan submitted. You will be notified when complete. "
+            f"Next (required): exec sh /home/node/.openclaw/agents/material/bin/mat.sh submitted {job_id} {business_id}"
+        ),
     }
 
 
