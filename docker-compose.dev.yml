@@ -38,7 +38,9 @@ services:
       # (sessions resolve at /openclaw/agents/{agent}/sessions, matching the
       # gateway's ./openclaw:/home/node/.openclaw mount).
       - ./openclaw:/openclaw
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "6000", "--reload"]
+    # Graceful-shutdown cap: the UI holds an SSE stream open, so without it a
+    # --reload waits forever for connections to close and the service stays down.
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "6000", "--reload", "--timeout-graceful-shutdown", "5"]
 
   audit-service:
     build:

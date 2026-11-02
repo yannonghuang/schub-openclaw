@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from data.schemas import Message
 from utils.redis import publish_message, get_redis_client, get_events_since
 from datetime import datetime, timezone
+import hashlib
 import json
 import asyncio
 import time
@@ -97,6 +98,19 @@ async def set_locale(req: LocaleRequest):
     return {"ok": True}
 
 
+@router.get("/run-thread/{business_id}")  # browser: /agui/run-thread/{id} (nginx strips /agui)
+async def get_run_thread(business_id: str, session_key: str | None = None):
+    """Chat thread that owns `session_key`'s run (or, without one / when it can't be
+    resolved, the thread that last started a run for the business). The panel uses it
+    to show business-wide state, like the open negotiation card, only in the tab that
+    owns the run."""
+    thread = await _thread_for_session(session_key)
+    if not thread:
+        redis = await get_redis_client()
+        thread = await redis.get(f"audit:trace:{business_id}")
+    return {"thread_id": thread or None}
+
+
 @router.get("/locale/{business_id}")
 async def get_locale(business_id: str):
     redis = await get_redis_client()
@@ -117,6 +131,8 @@ async def publish(msg: Message):
     # Safety-net: on an order approved/rejected trace, schedule a check that the
     # order→material callback actually fired (and fire it if not).
     await _maybe_schedule_reconcile(msg.content)
+    await _watch_trace(msg.content)
+    await _watch_job_end(msg.content)
     return {"status": "ok"}
 
 # --- AG-UI SSE subscribe ---
@@ -125,10 +141,15 @@ async def agui_sse(
     business_id: str,
     request: Request,
     last_event_id: str | None = Header(None, alias="last-event-id"),
+    since: str | None = None,
 ):
     """AG-UI SSE endpoint. Streams events as text/event-stream with monotonic IDs.
     Supports Last-Event-ID header for replay on reconnect (up to 200 missed events, 1h TTL).
+    `?since=<seq>` does the same for a client-side reconnect: the browser only sends
+    the header on its own automatic retry, which it abandons after an HTTP error
+    (e.g. nginx 502 while this service restarts), so the client reopens the stream.
     """
+    last_event_id = last_event_id or since
     redis_client = await get_redis_client()
 
     async def event_generator():
@@ -189,7 +210,21 @@ async def agui_sse(
                     # Inject server-side timestamp into schub/trace events and persist as spans
                     if payload.get("type") == "CustomEvent" and payload.get("name") == "schub/trace":
                         payload.setdefault("timestamp", int(time.time() * 1000))
+                        # Agents publish traces without a thread; stamp the chat thread
+                        # of the run they belong to so each panel tab only shows its own
+                        # run's progress.
+                        if "threadId" not in payload:
+                            run_thread = await _trace_thread(business_id, payload.get("value") or {})
+                            if run_thread:
+                                payload["threadId"] = run_thread
                         _spawn_background(_persist_trace_span(business_id, payload))
+
+                    # Re-plan progress (from mcp-server): same thread stamping, no span.
+                    if payload.get("type") == "CustomEvent" and payload.get("name") == "schub/progress":
+                        if "threadId" not in payload:
+                            run_thread = await _trace_thread(business_id, payload.get("value") or {})
+                            if run_thread:
+                                payload["threadId"] = run_thread
 
                     # Assign monotonic sequence ID
                     seq = await redis_client.incr(f"agui:seq:{business_id}")
@@ -244,13 +279,18 @@ async def _persist_trace_span(business_id: str, payload: dict) -> None:
     """
     try:
         redis = await get_redis_client()
-        trace_id = await redis.get(f"audit:trace:{business_id}")
+        value = payload.get("value", {})
+        # This runs once per open SSE connection for the same event; record it once.
+        digest = hashlib.sha1(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
+        if not await redis.set(f"audit:span_seen:{business_id}:{digest}", 1, nx=True, ex=10):
+            return
+        # The run's own thread (stamped by _trace_thread), else the business's latest run.
+        trace_id = payload.get("threadId") or await redis.get(f"audit:trace:{business_id}")
         if not trace_id:
             return
         if isinstance(trace_id, bytes):
             trace_id = trace_id.decode()
 
-        value = payload.get("value", {})
         step = value.get("step", "")
         agent = value.get("agent", "")
         level = value.get("level", "major")
@@ -289,7 +329,9 @@ async def _persist_trace_span(business_id: str, payload: dict) -> None:
                 "started_at": started_at,
                 "status": "ok",
                 "thread_id": trace_id,
-                "attributes": {"step": step, "agent": agent, "level": level},
+                # params: interpolation values (e.g. rating) so a restored step reads the same
+                "attributes": {"step": step, "agent": agent, "level": level,
+                               **({"params": value["params"]} if value.get("params") else {})},
             })
 
         # Track this span as the latest open one
@@ -637,6 +679,58 @@ def _sessions_index(agent: str) -> dict:
         return {}
 
 
+# --- Run ownership: which chat thread a session (and its traces) belongs to ------
+
+RUN_THREAD_TTL = 86400
+RECENT_SESSION_SECS = 3600
+
+
+async def _thread_for_session(session_key: str | None) -> str | None:
+    """Chat thread that owns a session: walk `spawnedBy` up the subagent tree to the
+    main session, whose key is `agent:main:<thread>`. Cached, because finished
+    sessions are reaped from sessions.json."""
+    if not session_key:
+        return None
+    redis = await get_redis_client()
+    cached = await redis.get(f"runthread:{session_key}")
+    if cached:
+        return cached
+    key = session_key
+    for _ in range(6):
+        if key.startswith("agent:main:"):
+            thread = key[len("agent:main:"):]
+            await redis.set(f"runthread:{session_key}", thread, ex=RUN_THREAD_TTL)
+            return thread
+        parts = key.split(":")
+        entry = _sessions_index(parts[1]).get(key) if len(parts) > 2 else None
+        if not entry or not entry.get("spawnedBy"):
+            return None
+        key = entry["spawnedBy"]
+    return None
+
+
+def _recent_subagent_session(agent: str | None) -> str | None:
+    """The agent's only recently-active subagent session, if exactly one — for traces
+    published without a sessionKey. Ambiguous (concurrent runs) → None."""
+    if not agent or agent == "main":
+        return None
+    cutoff = (time.time() - RECENT_SESSION_SECS) * 1000
+    live = [k for k, v in _sessions_index(agent).items()
+            if ":subagent:" in k and v.get("updatedAt", 0) >= cutoff]
+    return live[0] if len(live) == 1 else None
+
+
+async def _trace_thread(business_id: str, value: dict) -> str | None:
+    """Thread a trace belongs to: its own sessionKey's run, else the agent's only
+    active session's run, else the thread that last started a run for the business."""
+    session_key = value.get("sessionKey") or _recent_subagent_session(value.get("agent"))
+    thread = await _thread_for_session(session_key)
+    if thread:
+        return thread
+    redis = await get_redis_client()
+    return await redis.get(f"audit:trace:{business_id}")
+
+
 def _latest_session_uuid(agent: str) -> str | None:
     """The agent's most-recently-updated session file uuid — i.e. the one that
     just emitted a terminal trace."""
@@ -914,15 +1008,20 @@ def _order_needs_callback(uuid: str) -> dict | None:
     return {"mat_key": m.group(1), "payload": payload}
 
 
-async def _fire_order_callback(mat_key: str, payload: dict) -> int:
-    body = {"model": "openclaw:material",
-            "messages": [{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
-            "stream": False}
-    async with httpx.AsyncClient(timeout=180) as client:
+async def _fire_order_callback(mat_key: str, payload: dict | str) -> int:
+    # sessions_send via /tools/invoke: the gateway rejects `x-openclaw-session-key`
+    # overrides for subagent sessions on /v1/chat/completions (OpenClaw >= 2026.6.x).
+    # Sent from material's own main session (tools.sessions.visibility="agent");
+    # timeoutSeconds=0 queues the material turn and returns immediately.
+    body = {"name": "sessions_send",
+            "sessionKey": "agent:material:main",
+            "args": {"sessionKey": mat_key,
+                     "message": payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False),
+                     "timeoutSeconds": 0}}
+    async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
-            f"{OPENCLAW_URL}/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}",
-                     "x-openclaw-session-key": mat_key, "Content-Type": "application/json"},
+            f"{OPENCLAW_URL}/tools/invoke",
+            headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"},
             json=body,
         )
         return resp.status_code
@@ -974,6 +1073,213 @@ async def _schedule_reconcile() -> None:
         await _reconcile_dropped_callbacks()
 
     _spawn_background(_run())
+
+
+# --- Run watchdog ---------------------------------------------------------------
+# Flags runs that are stuck in a way no legitimate wait explains, so a hang like
+# 2026-11-01's (material said "Delegated to Order Agent" but never spawned it) shows
+# up in the run's own panel tab instead of sitting silent. Detection only: it never
+# re-drives a run — a wrong guess would duplicate side effects (emails, promotions).
+#
+# Every agent trace records its session's latest step; a terminal trace drops it. A
+# pass every WATCHDOG_INTERVAL seconds then checks each live run:
+#   - human waits (negotiation reply, approval email): never flagged;
+#   - material orderSpawned: no order session spawned by it after WATCHDOG_SPAWN_GRACE;
+#   - material engineSubmitted: the engine job finished WATCHDOG_RESUME_GRACE ago and
+#     the run never moved on;
+#   - any other non-waiting step: no trace and no session activity for WATCHDOG_STALL.
+#
+# Separately it re-delivers lost engine completions: mcp-server reports every job end
+# with the session it resumed. If that run has emitted no trace since the job ended for
+# WATCHDOG_REDELIVER_GRACE, the completion never landed (redacted session key in the
+# engine call plus a skipped `mat.sh submitted`, or the target was mid-turn), so it is
+# re-bound to the real key via mcp-server, which re-sends it. Once per job; a duplicate
+# completion is harmless (`mat.sh rate` is a read + assessment).
+WATCH_KEY = "watchdog:runs"             # Redis hash: sessionKey -> {agent, biz, step, level, ts, jobId}
+WATCH_FLAGGED_KEY = "watchdog:flagged"  # Redis hash: sessionKey -> step it was flagged at
+WATCH_JOBS_KEY = "watchdog:jobs"        # Redis hash: sessionKey -> {jobId, agent, ended}
+WATCHDOG_REDELIVER_GRACE = int(os.getenv("WATCHDOG_REDELIVER_GRACE_SECONDS", "60"))
+MCP_URL = os.getenv("MCP_URL", "http://mcp-server:9500")
+WATCHDOG_INTERVAL = int(os.getenv("WATCHDOG_INTERVAL_SECONDS", "60"))
+WATCHDOG_STALL = int(os.getenv("WATCHDOG_STALL_SECONDS", "600"))
+WATCHDOG_SPAWN_GRACE = int(os.getenv("WATCHDOG_SPAWN_GRACE_SECONDS", "180"))
+WATCHDOG_RESUME_GRACE = int(os.getenv("WATCHDOG_RESUME_GRACE_SECONDS", "300"))
+WATCHDOG_MAX_AGE = 7 * 86400
+AUTH_URL = os.getenv("AUTH_URL", "http://auth-service:4000")
+_HUMAN_WAIT_RE = re.compile(r"[._](negotiationwaiting|awaitingapproval|resendingapproval)$")
+
+
+async def _watch_trace(content: str) -> None:
+    """Record a run session's latest trace step (or drop it on a terminal trace)."""
+    try:
+        payload = json.loads(content) if isinstance(content, str) else content
+        if not isinstance(payload, dict) or payload.get("name") != "schub/trace":
+            return
+        value = payload.get("value", {})
+        step, agent = value.get("step", ""), value.get("agent", "")
+    except (json.JSONDecodeError, AttributeError):
+        return
+    if not step or agent in ("watchdog", "main"):
+        return
+    key = value.get("sessionKey") or _recent_subagent_session(agent)
+    if not key or ":subagent:" not in key:
+        return
+    redis = await get_redis_client()
+    if _is_success_terminal(step):
+        await redis.hdel(WATCH_KEY, key)
+        await redis.hdel(WATCH_FLAGGED_KEY, key)
+        await redis.hdel(WATCH_JOBS_KEY, key)
+        return
+    await redis.hset(WATCH_KEY, key, json.dumps({
+        "agent": agent, "biz": value.get("businessId"), "step": step,
+        "level": value.get("level", "major"), "ts": time.time(), "jobId": value.get("jobId"),
+    }))
+
+
+def _unredact_session_key(key: str, agent: str | None) -> str | None:
+    """OpenClaw redacts keys in transcripts (`agent:…d097`), and agents copy them into
+    engine calls. Resolve one to the agent's unique live subagent key with that suffix."""
+    if "…" not in key and "*" not in key:
+        return key
+    tail = key.rsplit("…", 1)[-1]
+    if not agent or not tail or "*" in tail:
+        return None
+    hits = [k for k in _sessions_index(agent) if ":subagent:" in k and k.endswith(tail)]
+    return hits[0] if len(hits) == 1 else None
+
+
+async def _watch_job_end(content: str) -> None:
+    """Remember the session each finished engine job was meant to resume."""
+    try:
+        payload = json.loads(content) if isinstance(content, str) else content
+    except json.JSONDecodeError:
+        return
+    if not isinstance(payload, dict) or payload.get("type") != "ToolCallEnd":
+        return
+    raw, agent = payload.get("sessionKey"), payload.get("agentId")
+    if not raw:
+        return
+    if not agent and raw.startswith("agent:") and raw.count(":") >= 2:
+        agent = raw.split(":")[1]
+    key = _unredact_session_key(raw, agent)
+    if not key or ":subagent:" not in key:
+        return
+    redis = await get_redis_client()
+    await redis.hset(WATCH_JOBS_KEY, key, json.dumps({
+        "jobId": payload.get("toolCallId"), "agent": agent, "ended": time.time()}))
+
+
+async def _redeliver_lost_completion(key: str, e: dict, now: float) -> None:
+    redis = await get_redis_client()
+    raw = await redis.hget(WATCH_JOBS_KEY, key)
+    if not raw:
+        return
+    j = json.loads(raw)
+    if e["ts"] >= j["ended"]:
+        await redis.hdel(WATCH_JOBS_KEY, key)  # run moved on after the job: delivered
+        return
+    if now - j["ended"] < WATCHDOG_REDELIVER_GRACE:
+        return
+    await redis.hdel(WATCH_JOBS_KEY, key)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(f"{MCP_URL}/jobs/{j['jobId']}/session",
+                                  json={"session_key": key, "agent_id": j.get("agent") or ""})
+        print(f"[watchdog] re-delivered job {j['jobId']} completion to {key}: HTTP {r.status_code}", flush=True)
+    except Exception as ex:
+        print(f"[watchdog] re-delivery of job {j['jobId']} to {key} failed: {ex}", flush=True)
+
+
+async def _job_ended_at(job_id: str) -> float | None:
+    """Epoch seconds an engine job finished, or None while it's still running."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            job = (await client.get(f"{AUTH_URL}/async-jobs/{job_id}")).json()
+    except Exception:
+        return None
+    if job.get("status") not in ("completed", "failed") or not job.get("updated_at"):
+        return None
+    # updated_at is naive UTC
+    return datetime.fromisoformat(job["updated_at"]).replace(tzinfo=timezone.utc).timestamp()
+
+
+async def _stall_reason(key: str, e: dict, now: float) -> str | None:
+    step = e["step"].lower()
+    if _HUMAN_WAIT_RE.search(step):
+        return None
+    meta = _sessions_index(key.split(":")[1]).get(key) or {}
+    last_activity = max(e["ts"], meta.get("updatedAt", 0) / 1000)
+    for suffix, child in ((".orderspawned", "order"), (".planningspawning", "planning")):
+        if step.endswith(suffix):
+            spawned = any(v.get("spawnedBy") == key for v in _sessions_index(child).values())
+            if not spawned and now - e["ts"] > WATCHDOG_SPAWN_GRACE:
+                return f"{child} agent was never started"
+            return None
+    if step.endswith(".enginesubmitted") and e.get("jobId"):
+        ended = await _job_ended_at(e["jobId"])
+        if ended and now - max(ended, last_activity) > WATCHDOG_RESUME_GRACE:
+            return "engine job finished but the run never resumed"
+        return None
+    if e.get("level") != "waiting" and now - last_activity > WATCHDOG_STALL:
+        return f"no progress for {int((now - last_activity) // 60)} min"
+    return None
+
+
+async def _watchdog_pass() -> None:
+    redis = await get_redis_client()
+    flagged = await redis.hgetall(WATCH_FLAGGED_KEY)
+    now = time.time()
+    for key, raw in (await redis.hgetall(WATCH_KEY)).items():
+        e = json.loads(raw)
+        if now - e["ts"] > WATCHDOG_MAX_AGE:
+            await redis.hdel(WATCH_KEY, key)
+            await redis.hdel(WATCH_FLAGGED_KEY, key)
+            continue
+        await _redeliver_lost_completion(key, e, now)
+        if flagged.get(key) == e["step"]:
+            continue  # already flagged at this step; a new step re-arms it
+        reason = await _stall_reason(key, e, now)
+        if not reason:
+            continue
+        await redis.hset(WATCH_FLAGGED_KEY, key, e["step"])
+        print(f"[watchdog] stalled run {key}: {reason} (last step {e['step']})", flush=True)
+        # The one stall safe to fix automatically: a handoff whose child never started (the
+        # spawn step was skipped or failed). No child exists, so nothing can duplicate, and
+        # `mat.sh order|planning` spawns idempotently.
+        m = re.match(r"(order|planning) agent was never started", reason)
+        if m and key.startswith("agent:material:subagent:"):
+            child = m.group(1)
+            try:
+                await _fire_order_callback(key, (
+                    f"SYSTEM: the {child.capitalize()} Agent was never started. "
+                    f"Run `exec sh /home/node/.openclaw/agents/material/bin/mat.sh {child}` now "
+                    f"and continue from its output."))
+                reason += " — re-driven"
+                print(f"[watchdog] re-drove {key} to spawn the {child} agent", flush=True)
+            except Exception as ex:
+                print(f"[watchdog] re-drive failed for {key}: {ex}", flush=True)
+        # sessionKey makes _trace_thread stamp the owning chat thread, so the flag lands
+        # in that run's panel tab.
+        value = {"step": "trace.watchdog.stalled", "agent": "watchdog", "level": "major",
+                 "businessId": e.get("biz"), "sessionKey": key,
+                 "params": {"agent": e["agent"], "reason": reason, "lastStep": e["step"]}}
+        await publish_message(f"business:{EMAIL_NODE}:channel", {
+            "from": "-1",
+            "text": json.dumps({"type": "CustomEvent", "name": "schub/trace", "value": value}),
+        })
+
+
+async def _watchdog_loop() -> None:
+    while True:
+        await asyncio.sleep(WATCHDOG_INTERVAL)
+        try:
+            await _watchdog_pass()
+        except Exception as e:
+            print(f"[watchdog] pass failed: {e}", flush=True)
+
+
+def start_watchdog() -> None:
+    _spawn_background(_watchdog_loop())
 
 
 async def _maybe_schedule_reconcile(content: str) -> None:

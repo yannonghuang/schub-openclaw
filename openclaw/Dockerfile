@@ -1,4 +1,6 @@
-FROM ghcr.io/openclaw/openclaw:latest
+# Pinned: :latest silently picked up 2026.7.x, which rejects subagent session-key
+# overrides on /v1/chat/completions and broke async-job resume. Bump deliberately.
+FROM ghcr.io/openclaw/openclaw:2026.7.1
 
 # Install supergateway — bridges HTTP/SSE MCP servers to stdio for bundle-mcp
 USER root

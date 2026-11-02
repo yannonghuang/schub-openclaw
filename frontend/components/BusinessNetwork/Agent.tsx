@@ -5,7 +5,7 @@ import { useRouter } from "next/router";
 import { Resizable } from "re-resizable";
 import { useTranslation } from "next-i18next/pages";
 import { useAGUIStream, type ChatMessage } from "../../hooks/useAGUIStream";
-import type { TraceEvent, ToolCallEndEvent, HITLReplyEvent } from "../../types/agui-events";
+import type { TraceEvent, ToolCallEndEvent, HITLReplyEvent, ProgressEventValue } from "../../types/agui-events";
 import { AuditEventTraceability } from "../audit/AuditEventTraceability";
 import { SuggestionItem, type Suggestion } from "./SuggestionItem";
 
@@ -42,7 +42,76 @@ function formatElapsed(ms: number): string {
   return rem > 0 ? `+${m}m${rem}s` : `+${m}m`;
 }
 
-function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowActive: boolean }) {
+function formatClock(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(s / 60);
+  return m > 0 ? `${m}m${String(s % 60).padStart(2, "0")}s` : `${s}s`;
+}
+
+/** Rebuild a thread's workflow steps from its audit spans (one span per trace event).
+ *  Older runs recorded each event once per open panel connection, so collapse
+ *  repeats of the same step within a few seconds. */
+async function restoreTraceSteps(threadId: string): Promise<StepEvent[]> {
+  try {
+    const res = await fetch(`/audit/trace/${encodeURIComponent(threadId)}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    const spans: any[] = Array.isArray(data?.spans) ? data.spans : [];
+    const steps: StepEvent[] = [];
+    for (const s of spans) {
+      const a = s.attributes ?? {};
+      if (!a.step) continue;
+      const ts = Date.parse(s.started_at) || 0;
+      const prev = steps[steps.length - 1];
+      if (prev && prev.label === a.step && prev.agent === a.agent && Math.abs(ts - prev.ts) < 5000) continue;
+      steps.push({ label: a.step, agent: a.agent, level: a.level, params: a.params, ts });
+    }
+    return steps.sort((x, y) => x.ts - y.ts);
+  } catch {
+    return [];
+  }
+}
+
+/** Live bar for a long engine job (the material impact re-plan): demands planned so
+ *  far, elapsed time, and a rough ETA extrapolated from the rate so far. */
+function JobProgress({ progress }: { progress: ProgressEventValue }) {
+  const { t } = useTranslation("agent");
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const elapsed = now - progress.startedAt;
+  const { current, total } = progress;
+  const pct = total > 0 ? Math.min(100, (current / total) * 100) : 0;
+  // Extrapolate only once there's a meaningful sample; progress is not linear, so
+  // the ETA is labelled approximate.
+  const eta = current > 0 && total > current && elapsed > 30_000 ? (elapsed / current) * (total - current) : null;
+  return (
+    <div className="mt-2 rounded-lg border border-blue-100 bg-white px-2.5 py-2">
+      <div className="flex items-center gap-2 text-xs font-medium text-blue-700">
+        <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+        {t("run.replanTitle")}
+      </div>
+      <div className="mt-1.5 h-1.5 w-full rounded-full bg-blue-100 overflow-hidden">
+        <div
+          className={`h-full rounded-full bg-blue-500 transition-all duration-700 ${total > 0 ? "" : "animate-pulse w-1/4"}`}
+          style={total > 0 ? { width: `${Math.max(pct, 2)}%` } : undefined}
+        />
+      </div>
+      <div className="mt-1 flex justify-between gap-3 text-[11px] text-gray-500 tabular-nums">
+        <span>
+          {total > 0
+            ? t("run.replanProgress", { current, total, elapsed: formatClock(elapsed) })
+            : t("run.replanStarting", { elapsed: formatClock(elapsed) })}
+        </span>
+        {eta !== null && <span>{t("run.replanEta", { eta: formatClock(eta) })}</span>}
+      </div>
+    </div>
+  );
+}
+
+function StepsTrace({ steps, workflowActive, progress }: { steps: StepEvent[]; workflowActive: boolean; progress?: ProgressEventValue | null }) {
   const { t, i18n } = useTranslation("agent");
 
   // Translate a step key if it looks like an i18n key (e.g. "trace.planning.assessmentStarted").
@@ -112,6 +181,7 @@ function StepsTrace({ steps, workflowActive }: { steps: StepEvent[]; workflowAct
           </div>
         );
       })}
+      {progress && <JobProgress progress={progress} />}
     </div>
     </div>
   );
@@ -203,13 +273,16 @@ function negotiationCardContent(neg: ActiveNegotiation, locale?: string): string
   const askZh = "请提议新的 delay / qty、保持原样，或选择放弃。";
   const roundEn = neg.round > 1 ? `round ${neg.round}` : "first look";
   const roundZh = neg.round > 1 ? `第 ${neg.round} 轮` : "首轮评估";
+  // The plan the impact is measured against — the case's active plan when the run started.
+  const baselineEn = neg.baselinePlanRunId != null ? `, vs active plan #${neg.baselinePlanRunId}` : "";
+  const baselineZh = neg.baselinePlanRunId != null ? `，基于当前计划 #${neg.baselinePlanRunId}` : "";
   return isZh
     ? `这次调整将影响供应 ${neg.supplyId} 上的 ${neg.impactedDemandCount} 条需求 — ${paramsZh}。\n` +
       (neg.explanation ? `\n“${neg.explanation}”\n` : "") +
-      `\n${askZh}\n回复示例：试试 2 天 5% / 就这样 / 算了。\n也可用指令：/counter delay=<d> qty=<p> · /keep · /abandon\n（${roundZh}，评级 ${neg.rating}）`
+      `\n${askZh}\n回复示例：试试 2 天 5% / 就这样 / 算了。\n也可用指令：/counter delay=<d> qty=<p> · /keep · /abandon\n（${roundZh}，评级 ${neg.rating}${baselineZh}）`
     : `This change ${severityEn} ${neg.impactedDemandCount} demand ${plural(neg.impactedDemandCount, "line")} on supply ${neg.supplyId} — ${paramsEn}.\n` +
       (neg.explanation ? `\n“${neg.explanation}”\n` : "") +
-      `\n${askEn}\nTry: "try 3 days and 10%" / "keep as-is" / "drop it".\nOr use: /counter delay=<d> qty=<p> · /keep · /abandon\n(${roundEn}, rating ${neg.rating})`;
+      `\n${askEn}\nTry: "try 3 days and 10%" / "keep as-is" / "drop it".\nOr use: /counter delay=<d> qty=<p> · /keep · /abandon\n(${roundEn}, rating ${neg.rating}${baselineEn})`;
 }
 
 // Strip HTML comments (e.g. <!-- <pending_option_b> ... --> agent anchors)
@@ -320,13 +393,14 @@ function formatTs(iso?: string): string {
 /* ------------------------------------------------------------------ */
 /* MessageTable — scrollable conversation with trace inlined at end    */
 /* ------------------------------------------------------------------ */
-function MessageTable({ height, onHeightChange, isLoading, messages, steps, workflowActive }: {
+function MessageTable({ height, onHeightChange, isLoading, messages, steps, workflowActive, progress }: {
   height: number;
   onHeightChange: (h: number) => void;
   isLoading: boolean;
   messages: ChatMessage[];
   steps: StepEvent[];
   workflowActive: boolean;
+  progress?: ProgressEventValue | null;
 }) {
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -381,8 +455,8 @@ function MessageTable({ height, onHeightChange, isLoading, messages, steps, work
             </div>
           );
         })}
-        {(steps.length > 0 || workflowActive) && (
-          <StepsTrace steps={steps} workflowActive={workflowActive} />
+        {(steps.length > 0 || workflowActive || progress) && (
+          <StepsTrace steps={steps} workflowActive={workflowActive || !!progress} progress={progress} />
         )}
         {isLoading && steps.length === 0 && !workflowActive && <Tool_Spinner />}
       </div>
@@ -425,6 +499,8 @@ export default function Agent({
 
   const [traceSteps, setTraceSteps] = useState<StepEvent[]>([]);
   const [workflowActive, setWorkflowActive] = useState(false);
+  // Live progress of a long engine job (material re-plan); null when none is running.
+  const [jobProgress, setJobProgress] = useState<ProgressEventValue | null>(null);
   const workflowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -513,6 +589,17 @@ export default function Agent({
       console.log("[Agent] HITLReply → resuming via /agui/chat");
       const replyText = (event.value.messageContent || "").trim() || (event.value.approved ? "approve" : "cancel");
       await submit(replyText);
+    },
+    // onProgress — engine job progress: keep the tab visibly "working" with a bar.
+    (event) => {
+      if (event.value.done) {
+        setJobProgress(null);
+        return;
+      }
+      setJobProgress(event.value);
+      setWorkflowActive(true);
+      if (workflowTimerRef.current) clearTimeout(workflowTimerRef.current);
+      workflowTimerRef.current = setTimeout(() => setWorkflowActive(false), 600_000);
     }
   );
 
@@ -539,15 +626,13 @@ export default function Agent({
   /* The actionable card must appear whenever the allocator has an open  */
   /* negotiation-wait — regardless of whether/how the material agent     */
   /* narrated the trace, or the RunFinished-before-trace race. Poll the  */
-  /* allocator's open wait while this thread has shown material activity  */
-  /* and no card is currently displayed.                                 */
+  /* allocator's open wait whenever no card is displayed. Not gated on   */
+  /* having seen material traces: after a page reload (or a dropped SSE  */
+  /* stream) the tab has no trace history, and a wait registered before */
+  /* the reload would otherwise never surface — the run looks stuck.     */
   /* ------------------------------------------------------------------ */
-  const sawMaterialActivity = useMemo(
-    () => traceSteps.some((s) => /material|engine|negotiat/i.test(s.label || "")),
-    [traceSteps],
-  );
   useEffect(() => {
-    if (!resolvedThreadId || !sawMaterialActivity) return;
+    if (!resolvedThreadId) return;
     let stop = false;
     const tick = async () => {
       if (stop || activeNegotiationRef.current) return;
@@ -556,6 +641,13 @@ export default function Agent({
         if (!res.ok) return;
         const wait = await res.json();
         if (wait && typeof wait === "object") {
+          // The wait is business-wide; show it only in the tab whose run owns the
+          // waiting session. Unknown owner (switch unreachable) → show it anyway.
+          const sk = typeof wait.sessionKey === "string" ? wait.sessionKey : "";
+          const owner = await fetch(`/agui/run-thread/${businessId}?session_key=${encodeURIComponent(sk)}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null);
+          if (owner?.thread_id && owner.thread_id !== resolvedThreadId) return;
           openNegotiation(buildNeg(wait as Record<string, unknown>));
         }
       } catch {
@@ -565,7 +657,7 @@ export default function Agent({
     const id = setInterval(tick, 4000);
     tick();
     return () => { stop = true; clearInterval(id); };
-  }, [resolvedThreadId, sawMaterialActivity, openNegotiation]);
+  }, [resolvedThreadId, businessId, openNegotiation]);
 
   /* ------------------------------------------------------------------ */
   /* submit — adds user message locally then POSTs to /agui/chat        */
@@ -626,6 +718,12 @@ export default function Agent({
         const data = await resp.json();
         if (!cancelled) {
           setResolvedThreadId(data.langgraph_thread_id);
+          // Workflow steps aren't saved with the chat messages; rebuild them from the
+          // audit spans switch-service records per run, so a reopened tab still shows
+          // what the agents did.
+          restoreTraceSteps(data.langgraph_thread_id).then((steps) => {
+            if (!cancelled && steps.length) setTraceSteps((prev) => (prev.length ? prev : steps));
+          });
           setRestoredMessages(
             (data.messages ?? []).map((m: any) => ({
               id: m.id ?? crypto.randomUUID(),
@@ -901,6 +999,7 @@ export default function Agent({
         messages={allMessages}
         steps={traceSteps.length > 0 ? traceSteps : steps}
         workflowActive={workflowActive || isLoading}
+        progress={jobProgress}
       />
 
       {!workflowActive && !isLoading && resolvedThreadId && (

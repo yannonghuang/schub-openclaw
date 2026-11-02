@@ -84,6 +84,9 @@
       "optionsPresented": "Options presented to user",
       "rejected": "Maintenance window rejected — cancelling",
       "complete": "Scheduling workflow complete"
+    },
+    "watchdog": {
+      "stalled": "⚠️ Run looks stuck ({{agent}}): {{reason}} — last step: {{lastStep}}"
     }
   },
   "run": {
@@ -95,6 +98,10 @@
     "viewTimeline": "View timeline →",
     "hideTimeline": "Hide timeline",
     "typeMessage": "Type a message...",
-    "loadingThread": "Loading thread..."
+    "loadingThread": "Loading thread...",
+    "replanTitle": "Re-planning material impact",
+    "replanProgress": "{{current}}/{{total}} demands · {{elapsed}} elapsed",
+    "replanEta": "about {{eta}} left",
+    "replanStarting": "Starting… {{elapsed}} elapsed"
   }
 }
